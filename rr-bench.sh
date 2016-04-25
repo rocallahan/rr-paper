@@ -1,21 +1,23 @@
-N=6
+N=2
 
-echo NORMAL
+ulimit -n 4096
+
+echo ^^^^ NORMAL
 
 for i in $(seq 1 $N); do
   $CLEANUP
   time $CMD
 done
 
-echo SINGLE-CORE
+echo ^^^^ SINGLE-CORE
 
 for i in $(seq 1 $N); do
   $CLEANUP
-  time taskset 4 $CMD
+  time taskset 4 $CMD_SINGLE
 done
 
 rm -rf $HOME/.local/share/rr
-echo RECORD-NO-SYSCALLBUF
+echo ^^^^ RECORD-NO-SYSCALLBUF
 
 traces=(dummy)
 for i in $(seq 1 $N); do
@@ -24,14 +26,14 @@ for i in $(seq 1 $N); do
   traces+=(`realpath ~/.local/share/rr/latest-trace`)
 done
 
-echo REPLAY-NO-SYSCALLBUF
+echo ^^^^ REPLAY-NO-SYSCALLBUF
 
 for i in $(seq 1 $N); do
-  time rr replay -a ${traces[i]}
+  time rr replay -F -a ${traces[i]}
 done
 
 rm -rf $HOME/.local/share/rr
-echo RECORD-NO-CLONING
+echo ^^^^ RECORD-NO-CLONING
 
 for i in $(seq 1 $N); do
   $CLEANUP
@@ -39,7 +41,7 @@ for i in $(seq 1 $N); do
 done
 
 rm -rf $HOME/.local/share/rr
-echo RECORD
+echo ^^^^ RECORD
 
 traces=(dummy)
 for i in $(seq 1 $N); do
@@ -48,13 +50,13 @@ for i in $(seq 1 $N); do
   traces+=(`realpath ~/.local/share/rr/latest-trace`)
 done
 
-echo REPLAY
+echo ^^^^ REPLAY
 
 for i in $(seq 1 $N); do
-  time rr replay -a ${traces[i]}
+  time rr replay -F -a ${traces[i]}
 done
 
-echo DYNAMORIO
+echo ^^^^ DYNAMORIO
 
 for i in $(seq 1 $N); do
   $CLEANUP

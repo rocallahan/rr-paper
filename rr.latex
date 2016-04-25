@@ -20,18 +20,21 @@ enables many applications, such as reverse-execution debugging,
 debugging of hard-to-reproduce test failures, and ``black box''
 forensic analysis of failures in deployed systems. Existing
 record and replay approaches rely on recording an entire virtual machine
-(which is heavyweight), modifying the OS kernel (which adds deployment and maintainability costs),
+(which is heavyweight), modifying the OS kernel (which adds deployment and maintainence costs),
 or pervasive code instrumentation (which
 imposes significant performance and complexity overhead). We investigated
 whether it is possible to build a practical record and reply system that avoids
-all these issues. The answer turns out to be yes --- if the CPU and
+these issues. The answer turns out to be yes --- if the CPU and
 operating system meet certain
-(non-obvious) constraints. Fortunately modern Intel x86 CPUs, and modern stock Linux
+non-obvious constraints. Fortunately modern Intel x86 CPUs and modern stock Linux
 kernels and user-space frameworks meet these constraints, although this has only become true recently. With
 some novel optimizations, our system \system{} [not the real name; anonymized for
 review] records and replays real-world workloads
 with low overhead. \system{} forms the basis
 of an open-source reverse-execution debugger seeing significant use in practice.
+We present the design and implementation of \system{}, describe its performance on a
+variety of workloads, and identify constraints on hardware and operating system design required
+to support our approach.
 \end{abstract}
 
 \section{Introduction}
@@ -66,8 +69,7 @@ reducing recording and replay overhead. This optimization relies on modern Linux
 features: {\tt seccomp-bpf} to selectively suppress {\tt ptrace} traps for certain system
 calls, and {\tt perf} context-switch events to detect recorded threads blocking in the kernel.
 Section \ref{syscallbuf} describes this work, and Section \ref{results} gives some performance
-results, showing that on important application workloads \system{} recording and replay overhead is around
-1.5x or less.
+results, showing that on important application workloads \system{} recording and replay overhead is less than 2x.
 
 We rely on hardware and OS features designed for other goals, so it is surprising that
 \system{} works. In fact, it skirts the edge of feasibility, and in particular
@@ -80,7 +82,7 @@ it cannot be implemented on ARM CPUs. Section \ref{constraints} summarizes \syst
 on modern, stock hardware and kernels and without pervasive code instrumentation is possible and practical.
 \item We introduce the {\it system-call buffering} optimization and show that it dramatically reduces overhead.
 \item We show that recording and replay overhead is low in practice, for applications that don't use much parallelism.
-\item We identify hardware and OS design constraints needed to support our approach.
+\item We identify hardware and operating system design constraints required to support our approach.
 \end{itemize}
 
 \section{Design} \label{design}
@@ -355,27 +357,58 @@ This optimization works by cloning the input blocks and then reading the input d
 
 \section{Results} \label{results}
 
+Our results address the following questions:
+\begin{itemize}
+\item What is the run-time overhead of \system{} recording and replay, across different kinds of workloads?
+\item How much of the overhead is due to the single-core limitation?
+\item What are the impacts of the system-call buffering and file data cloning optimizations?
+\item What is the impact of not having to instrument code?
+\item How much space do \system{} traces consume?
+\end{itemize}
+
 \subsection{Workloads}
 
-A key use-case for \system{} is recording test suite execution so that nondeterministic test failures can be captured and debugged. Therefore we present two testsuite workloads: Firefox HTML DOM API tests and Samba tests.
+We present a variety of workloads to illuminate \system{}'s strengths and weaknesses.
 
-All tests run on...
+\emph{cp} duplicates a {\tt git} checkout of {\tt glibc} (revision 2d02fd07) using {\tt cp -a} (15200 files constituting 732MB of data, according to {\tt du -h}). {\tt cp} is single-threaded, making intensive use of synchronous reads and a variety of other filesystem-related system calls.
 
-By forcing everything onto a single core, \system{} slows down applications that are able to make use of parallelism. Workloads that create very many short-lived processes also slow down significantly under \system{}, because the system-call buffering optimization only starts working once \system{}'s preload library has been loaded, and typically at least 80 system calls are performed before that completes.
+\emph{make} builds DynamoRio \cite{Bruening2012} (version 6.1.0) with {\tt make -j8} ({\tt -j8} omitted when restricting to a single core). This tests potentially-parallel execution of many short-lived processes.
 
-* cp -a I/O workload: baseline, rr, rr-without-compression
-* make workload: baseline, rr
-* Firefox-Octane
-* Firefox-Mochitests
-* Samba tests
+\emph{octane} runs the Google Octane benchmark under the Mozilla Spidermonkey Javascript engine (Mercurial revision 9bd900888753). This illustrates performance on CPU-intensive code in a complex language runtime.
+
+\emph{htmltest} runs the Mozilla Firefox HTML forms tests. The harness is excluded from recording (using {\tt mach mochitest -f plain --debugger \system{} dom/html/test/forms}). This is an example from real-world usage.
+
+\emph{sambatest} runs a Samba (git revision 9ee4678b) UDP echo test via {\tt make test TESTS=samba4.echo.udp}. This is an example from real-world usage.
+
+All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RAM and a 512GB SSD using Btrfs in Fedora Core 23 Linux.
+
+\subsection{Overhead}
+
+Figure 1 shows the wall-clock run time of various configurations, normalized to the run time of the baseline configuration. For \emph{octane}, because the benchmark is designed to run for a fixed length of time and report a score, we report the ratio of the baseline score to the configuration-under-test score instead.
+Each test was run six times, discarding the first result and reporting the geometric mean of the other five results. Thus the results represent warm-cache performance, except that each replay test replays the result of the corresponding recording test, so the trace file data is not in cache.
+
+To show the impact of forcing all threads onto a single core, we report the overhead of using Linux {\tt taskset} to do that without any other changes. We report the overhead of \system{} with various optimizations disabled, to show their impact. We report the overhead of running the tests under the DynamoRio \cite{Bruening2012} null tool (version 6.1.0), to show a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is consistently reported to be among the fastest of such frameworks.) DynamoRio crashes on \emph{octane} so that result is not reported.
+
+With all optimizations, overhead is less than 2x for all benchmarks except \emph{make}, where the inability to use multiple cores is decisive. Also, \emph{make} creates many short-lived processes, and our system-call buffering optimization only starts working in a process once \system{}'s preload library has been loaded; typically at least 80 system calls are performed before that completes.
+
+In all the benchmarks, the additional overhead for \system{} over just restricting execution to a single core is less than 1.5x.
+
+Without system-call buffering, overhead is extremely high; enabling that optimization makes a huge difference. Cloning file data blocks reduces overhead significantly for \emph{cp} but has little effect on the other benchmarks.
+
+\system{} overhead is lower than the overhead of simply running these workloads under DynamoRio's ``null tool'' (i.e., running in the code instrumentation framework but not doing any record or replay work). Avoiding code instrumentation is a significant win.
 
 * Overhead on workloads
 ** no-rr single-core
 ** rr recording no-syscallbuf
 ** rr replay no-syscallbuf
+** rr replay no-cloning
 ** rr recording
 ** rr replay
 ** dynamo-rio
+
+\subsection{Space Usage}
+
+Figure 2 shows the space usage of traces.
 
 * Space usage (MB/s)
 ** Trace usage
@@ -462,7 +495,7 @@ ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the exe
 
 \subsection{Replaying User-Space With Kernel Support}
 
-Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Requiring kernel changes makes maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if low-overhead record and replay can be implemented outside the kernel, moving it into the kernel may not be desirable.
+Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Requiring kernel changes makes maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if record and replay can be well implemented outside the kernel, moving it into the kernel may not be desirable.
 
 \subsection{Pure User-Space Replay}
 
@@ -476,7 +509,7 @@ Record-and-replay features have been integrated into language-level virtual mach
 
 \subsection{Parallel Replay}
 
-Recording application threads running concurrently on multiple cores, with the possibility of data races, with low overhead, is extremely challenging. PinPlay \cite{Patil2010} and iDNA \cite{Bhansali2006} instrument shared-memory loads and report high overhead. SMP-ReVirt \cite{Dunlap2008} tracks page ownership using hardware page protection and reports high overhead. DoublePlay \cite{Veeraraghavan2011} runs two instances of the application and thus has high overhead when the application alone could saturate available cores. ODR \cite{Altekar2009} has low recording overhead but replay can be extremely expensive and is not guaranteed to reproduce the same program states.
+Recording application threads running concurrently on multiple cores, with the possibility of data races, with low overhead, is extremely challenging. PinPlay \cite{Patil2010} and iDNA \cite{Bhansali2006} instrument shared-memory loads and report high overhead. SMP-ReVirt \cite{Dunlap2008} tracks page ownership using hardware page protection and reports high overhead on benchmarks with a lot of sharing. DoublePlay \cite{Veeraraghavan2011} runs two instances of the application and thus has high overhead when the application alone could saturate available cores. ODR \cite{Altekar2009} has low recording overhead but replay can be extremely expensive and is not guaranteed to reproduce the same program states.
 
 The best hope for general low-overhead parallel recording seems to be hardware support. Projects such as FDR \cite{Xu2003}, BugNet \cite{Narayanasamy2005}, Rerun \cite{Hower2008}, DeLorean \cite{Montesinos2008} and QuickRec \cite{Pokam2013} have explored low-overhead parallel recording hardware.
 
