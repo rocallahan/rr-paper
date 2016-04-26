@@ -388,14 +388,14 @@ All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RA
 
 \begin{table*}[t]
   \centering
-  \begin{tabular}{lrrrrrrr}
-Workload & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio \\
+  \begin{tabular}{lrrrrrrrr}
+Workload & \shortstack[r]{Baseline \\ duration (s)} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio \\
 \hline
-cp & 1.78 & 0.90 & 1.00 & 23.70 & 14.86 & 4.36 & 1.29 \\
-make & 8.06 & 12.11 & 3.44 & 11.64 & 14.51 & 7.98 & 11.17 \\
-octane & 1.84 & 1.59 & 1.38 & 2.68 & 2.46 & 1.79 & crash \\
-htmltest & 1.50 & 0.91 & 1.08 & 4.32 & 3.13 & 1.50 & 13.48 \\
-sambatest & 1.40 & 1.22 & 0.94 & 2.07 & 1.71 & 1.39 & 1.44 \\
+cp & 1.00 & 1.78 & 0.90 & 1.00 & 23.70 & 14.86 & 4.36 & 1.29 \\
+make & 21.03 & 8.06 & 12.11 & 3.44 & 11.64 & 14.51 & 7.98 & 11.17 \\
+octane & 32.68 & 1.84 & 1.59 & 1.38 & 2.68 & 2.46 & 1.79 & crash \\
+htmltest & 27.60 & 1.50 & 0.91 & 1.08 & 4.32 & 3.13 & 1.50 & 13.48 \\
+sambatest & 32.87 & 1.40 & 1.22 & 0.94 & 2.07 & 1.71 & 1.39 & 1.44 \\
   \end{tabular}
   \caption{Run-time Overhead}
   \label{run-time-overhead-table}
