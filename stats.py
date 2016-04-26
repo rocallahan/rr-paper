@@ -35,21 +35,13 @@ def flush_header(name, h, times, octane_scores):
     elif h == "NORMAL":
         results.append(geomean(times))
         baseline_score = geomean(scores)
-    elif h[0:6] == "REPLAY":
+    elif h[0:6] == "REPLAY" and name == "octane":
         results.append((geomean(scores)/baseline_score)*geomean(times)/record_time)
     else:
         results.append(geomean(scores)/baseline_score)
 
     if h[0:6] == "RECORD":
         record_time = geomean(times)
-
-def print_hdrs(f):
-    print "\t",
-    for line in f:
-        m = header.match(line)
-        if m:
-            print "%s\t"%m.group(1),
-    print
 
 def process(name, f):
     have_header = False
@@ -73,15 +65,11 @@ def process(name, f):
             have_header = True
     flush_header(name, h, times, octane_scores)
 
-f = open("output-cp", 'r')
-print_hdrs(f)
+print "\tNORMAL\tRECORD\tREPLAY\tSINGLE-CORE\tRECORD-NO-SYSCALLBUF\tREPLAY-NO-SYSCALLBUF\tRECORD-NO-CLONING\tDYNAMORIO"
 
 for name in ['cp', 'make', 'octane', 'htmltest', 'sambatest']:
     f = open("output-%s"%name, 'r')
     process(name, f)
-    print "%s\t"%name,
-    for r in results:
-        print "%f\t"%r,
-    print
+    print "%s\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f"%(name,results[0],results[5],results[6],results[1],results[2],results[3],results[4],results[7])
     results = []
 

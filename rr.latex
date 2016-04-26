@@ -3,6 +3,8 @@
 \usepackage{times}
 \usepackage{fullpage}
 \PassOptionsToPackage{hyphens}{url}\usepackage[hidelinks]{hyperref}
+\usepackage{graphicx}
+\usepackage{epstopdf}
 
 \begin{document}
 
@@ -243,7 +245,7 @@ old file data. This works well in practice.
 
 Even better, modern filesystems such as XFS and Btrfs offer copy-on-write logical copies of files and even block ranges within files, ideal for our purposes. When a mapped file is on the same filesystem as the recorded trace, and the filesystem supports cloning, \system{} uses those APIs to clone mapped files into the trace. These clone operations are essentially free in time and space, until/unless the original file is modified or deleted.
 
-\system{} compresses all trace data with the {\tt zlib} ``deflate'' method.
+\system{} compresses all trace data, other than cloned files and blocks, with the {\tt zlib} ``deflate'' method.
 
 With these optimizations, in practice trace storage is a non-issue. Section \ref{results} presents some results.
 
@@ -361,7 +363,7 @@ Our results address the following questions:
 \begin{itemize}
 \item What is the run-time overhead of \system{} recording and replay, across different kinds of workloads?
 \item How much of the overhead is due to the single-core limitation?
-\item What are the impacts of the system-call buffering and file data cloning optimizations?
+\item What are the impacts of the system-call buffering and block cloning optimizations?
 \item What is the impact of not having to instrument code?
 \item How much space do \system{} traces consume?
 \end{itemize}
@@ -384,37 +386,95 @@ All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RA
 
 \subsection{Overhead}
 
-Figure 1 shows the wall-clock run time of various configurations, normalized to the run time of the baseline configuration. For \emph{octane}, because the benchmark is designed to run for a fixed length of time and report a score, we report the ratio of the baseline score to the configuration-under-test score instead --- except for replay tests, where the reported score will necessarily be the same as the score during recording. For \emph{octane} replay tests, we report the ratio of the baseline score to the recorded score, multiplied by the ratio of replay run time to recording run time.
-Each test was run six times, discarding the first result and reporting the geometric mean of the other five results. Thus the results represent warm-cache performance, except that each replay test replays the result of the corresponding recording test, so the trace file data is not in cache.
+\begin{table*}[t]
+  \centering
+  \begin{tabular}{lrrrrrrr}
+Workload & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio \\
+\hline
+cp & 1.78 & 0.90 & 1.00 & 23.70 & 14.86 & 4.36 & 1.29 \\
+make & 8.06 & 12.11 & 3.44 & 11.64 & 14.51 & 7.98 & 11.17 \\
+octane & 1.84 & 1.59 & 1.38 & 2.68 & 2.46 & 1.79 & crash \\
+htmltest & 1.50 & 0.91 & 1.08 & 4.32 & 3.13 & 1.50 & 13.48 \\
+sambatest & 1.40 & 1.22 & 0.94 & 2.07 & 1.71 & 1.39 & 1.44 \\
+  \end{tabular}
+  \caption{Run-time Overhead}
+  \label{run-time-overhead-table}
+\end{table*}
 
-To show the impact of forcing all threads onto a single core, we report the overhead of using Linux {\tt taskset} to do that without any other changes. We report the overhead of \system{} with various optimizations disabled, to show their impact. We report the overhead of running the tests under the DynamoRio \cite{Bruening2012} null tool (version 6.1.0), to show a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is consistently reported to be among the fastest of such frameworks.) DynamoRio crashes on \emph{octane} so that result is not reported.
+Table \ref{run-time-overhead-table} shows the wall-clock run time of various configurations, normalized to the run time of the baseline configuration. For \emph{octane}, because the benchmark is designed to run for a fixed length of time and report a score, we report the ratio of the baseline score to the configuration-under-test score instead --- except for replay tests, where the reported score will necessarily be the same as the score during recording. For \emph{octane} replay tests, we report the ratio of the baseline score to the recorded score, multiplied by the ratio of replay run time to recording run time.
+Each test was run six times, discarding the first result and reporting the geometric mean of the other five results. Thus the results represent warm-cache performance.
 
-With all optimizations, overhead is less than 2x for all benchmarks except \emph{make}, where the inability to use multiple cores is decisive. Also, \emph{make} creates many short-lived processes, and our system-call buffering optimization only starts working in a process once \system{}'s preload library has been loaded; typically at least 80 system calls are performed before that completes.
+``Single core'' reports the overhead of just restricting all threads to a single core using Linux {\tt taskset}.
 
-In all the benchmarks, the additional overhead for \system{} over just restricting execution to a single core is less than 1.5x.
+``Record no-syscallbuf'' and ``Replay no-syscallbuf'' report overhead with the system-call buffering optimization disabled (which also disables block cloning). ``Record no-cloning'' reports overhead with just block cloning disabled.
 
-Without system-call buffering, overhead is extremely high; enabling that optimization makes a huge difference. Cloning file data blocks reduces overhead significantly for \emph{cp} but has little effect on the other benchmarks.
+``DynamoRio'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
 
-\system{} overhead is lower than the overhead of simply running these workloads under DynamoRio's ``null tool'' (i.e., running in the code instrumentation framework but not doing any record or replay work). Avoiding code instrumentation is a significant win.
+\subsection{Observations}
 
-* Overhead on workloads
-** no-rr single-core
-** rr recording no-syscallbuf
-** rr replay no-syscallbuf
-** rr replay no-cloning
-** rr recording
-** rr replay
-** dynamo-rio
+Overhead on \emph{make} is significantly higher than for the other workloads. Just forcing \emph{make} onto a single core imposes major slowdown. Also, \emph{make} creates many short-lived processes; it forks and execs 2430 processes. (The next most prolific workload is \emph{sambatest} with 89.) Our system-call buffering optimization only starts working in a process once \system{}'s preload library has been loaded, but typically at least 80 system calls are performed before that completes, so the effectiveness of system-call buffering is limited with short-lived processes.
+
+\begin{figure}[t]
+\includegraphics[scale=0.5]{RecordReplay}
+\caption{Run-time Overhead Excluding \emph{make}}
+\label{run-time-overhead-chart}
+\end{figure}
+
+Figure \ref{run-time-overhead-chart} shows the overall recording and replay overhead for workloads other than \emph{make}. Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding \emph{make}, \system{}'s replay overhead is lower than its recording overhead and replay can even be faster than normal execution. For these workloads this is mainly because during replay most system calls do no work. For interactive applications, not represented here, replay can take much less time than the original execution because idle periods are eliminated.
+
+\emph{octane} is the only workload here other than \emph{make} making significant use of multiple cores, and this accounts for the majority of \system{}'s overhead on \emph{octane}.
+
+\begin{figure}[t]
+\includegraphics[scale=0.5]{Optimizations}
+\caption{Impact Of Optimizations}
+\label{optimizations-chart}
+\end{figure}
+
+Figure \ref{optimizations-chart} shows the impact of system-call buffering and blocking cloning on recording. The system-call buffering optimization produces a large reduction in recording (and replay) overhead. Cloning file data blocks is a major improvement for \emph{cp} recording but has essentially no effect on the other workloads.
+
+\begin{figure}[t]
+\includegraphics[scale=0.5]{DynamoRio}
+\caption{Comparison With DynamoRio}
+\label{dynamorio-chart}
+\end{figure}
+
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though the former is doing no useful work (and on \emph{make} DynamoRio can utilize multiple cores). On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Therefore we expect a record-and-replay tool built with DynamoRio-like code instrumentation to have significantly higher overhead than \system{}.
 
 \subsection{Space Usage}
 
-Figure 2 shows the space usage of traces.
+\system{} traces contain three kinds of data:
+\begin{itemize}
+\item Cloned (or hard-linked) files used by mmap operations
+\item Cloned file blocks
+\item All other trace data, especially event metadata and the results of general system calls
+\end{itemize}
 
-* Space usage (MB/s)
-** Trace usage
-** Uncompressed trace usage
-** Cloned read data
-** Cloned mmap data
+The cloned files are almost entirely just the executables and libraries loaded by tracees. As long as those files don't change and are not removed, which is generally true in practice, their clones take up no additional space. For simplicity, \system{} makes no attempt to eliminate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice.
+
+\begin{table*}[t]
+  \centering
+  \begin{tabular}{lrrr}
+Workload & \shortstack[r]{Compressed trace \\ MB/s} & Compression ratio & \shortstack[r]{Cloned blocks \\ MB/s} \\
+\hline
+cp & 19.77 & 4.89 & 611.82 \\
+make & 15.71 & 8.38 & 5.49 \\
+octane & 0.08 & 8.36 & 0.00 \\
+htmltest & 0.67 & 5.97 & 0.00 \\
+sambatest & 6.58 & 21.98 & 0.41 \\
+  \end{tabular}
+  \caption{Space Usage}
+  \label{space-usage-table}
+\end{table*}
+
+Table \ref{space-usage-table} shows the space usage of each workload, in megabytes per second for the general trace data and the cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the baseline configuration of the workload. The space consumed by each trace shows very little variation between runs.
+
+Like cloned files, cloned file blocks do not consume space as long as the underlying data they're cloned from persists.
+
+The different workloads have highly varying space consumption rates, but several megabytes per second is easy for modern systems to handle. Compression ratios vary depending on the kind of data being handled by the workload. In any case, in real-world usage trace storage has not been a concern.
+
+[TODO: show a graph for space usage? Which one?]
+
+[TODO: compute and show variance for runtime overhead and space usage results?]
 
 \section{Hardware And Software Design Constraints} \label{constraints}
 
@@ -519,9 +579,11 @@ The best hope for general low-overhead parallel recording seems to be hardware s
 
 Putting record and replay support in the kernel has performance benefits, e.g. reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record and replay while being less invasive than a full kernel implementation.
 
-The applications of record-and-replay are more interesting and important than the base technology. For example, one can perform high-overhead dynamic analysis during replay \cite{Devecsery2014, Dolan-Gavitt2015, Patil2010}, potentially parallelized over multiple segments of the execution. With \system{}'s no-instrumentation approach, one could collect performance data such as sampled stacks and performance counter values during recording, and correlate that data with rich analysis generated during replay (e.g. cache simulation). Always-on record-and-replay would make finding and fixing bugs in the field much easier.
+Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008} or dthreads \cite{Liu2011} may perform adequately for some workloads.
 
-Overcoming the single-core limitation while keeping overhead low will be very difficult without hardware support. Demonstrating compelling applications for record-and-replay will build the case for including such support in commodity hardware.
+The applications of record-and-replay are perhaps more interesting and important than the base technology. For example, one can perform high-overhead dynamic analysis during replay \cite{Devecsery2014, Dolan-Gavitt2015, Patil2010}, potentially parallelized over multiple segments of the execution. With \system{}'s no-instrumentation approach, one could collect performance data such as sampled stacks and performance counter values during recording, and correlate that data with rich analysis generated during replay (e.g. cache simulation). Always-on record-and-replay would make finding and fixing bugs in the field much easier.
+
+Supporting recording and replay of parallel shared-memory applications with potential races, while keeping overhead low, will be very difficult without hardware support. Demonstrating compelling applications for record-and-replay will build the case for including such support in commodity hardware.
 
 \section{Conclusions}
 

@@ -1,4 +1,4 @@
-N=2
+N=6
 
 ulimit -n 4096
 
@@ -54,6 +54,7 @@ echo ^^^^ REPLAY
 
 for i in $(seq 1 $N); do
   time rr replay -F -a ${traces[i]}
+  mv ${traces[i]} $HOME/rr-paper/traces/$NAME-$i
 done
 
 echo ^^^^ DYNAMORIO
