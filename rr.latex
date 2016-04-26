@@ -370,7 +370,7 @@ Our results address the following questions:
 
 \subsection{Workloads}
 
-We present a variety of workloads to illuminate \system{}'s strengths and weaknesses.
+We present a variety of workloads to illuminate \system{}'s strengths and weaknesses. Benchmarks were chosen to fit in system memory (to minimize the impact of I/O on test results), and to run for about 30 seconds each (except for \emph{cp} where a 30s run time would require it to not fit in memory).
 
 \emph{cp} duplicates a {\tt git} checkout of {\tt glibc} (revision 2d02fd07) using {\tt cp -a} (15200 files constituting 732MB of data, according to {\tt du -h}). {\tt cp} is single-threaded, making intensive use of synchronous reads and a variety of other filesystem-related system calls.
 
@@ -378,7 +378,7 @@ We present a variety of workloads to illuminate \system{}'s strengths and weakne
 
 \emph{octane} runs the Google Octane benchmark under the Mozilla Spidermonkey Javascript engine (Mercurial revision 9bd900888753). This illustrates performance on CPU-intensive code in a complex language runtime.
 
-\emph{htmltest} runs the Mozilla Firefox HTML forms tests. The harness is excluded from recording (using {\tt mach mochitest -f plain --debugger \system{} dom/html/test/forms}). This is an example from real-world usage.
+\emph{htmltest} runs the Mozilla Firefox HTML forms tests. The harness is excluded from recording (using {\tt mach mochitest -f plain --debugger \system{} dom/html/test/forms}). This is an example from real-world usage. About 30\% of user-space CPU time is in the harness.
 
 \emph{sambatest} runs a Samba (git revision 9ee4678b) UDP echo test via {\tt make test TESTS=samba4.echo.udp}. This is an example from real-world usage.
 
