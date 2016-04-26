@@ -243,11 +243,11 @@ all executables and libraries to the recorded trace on every execution would imp
 or recompile replaces executables with new files, instead of writing to the existing files, the links retain the
 old file data. This works well in practice.
 
-Even better, modern filesystems such as XFS and Btrfs offer copy-on-write logical copies of files and even block ranges within files, ideal for our purposes. When a mapped file is on the same filesystem as the recorded trace, and the filesystem supports cloning, \system{} uses those APIs to clone mapped files into the trace. These clone operations are essentially free in time and space, until/unless the original file is modified or deleted.
+Even better, modern filesystems such as XFS and Btrfs offer copy-on-write logical copies of files (and even block ranges within files), ideal for our purposes. When a mapped file is on the same filesystem as the recorded trace, and the filesystem supports cloning, \system{} clones mapped files into the trace. These clone operations are essentially free in time and space, until/unless the original file is modified or deleted.
 
 \system{} compresses all trace data, other than cloned files and blocks, with the {\tt zlib} ``deflate'' method.
 
-With these optimizations, in practice trace storage is a non-issue. Section \ref{results} presents some results.
+With these optimizations, in practice trace storage is a non-issue. Section \ref{space-results} presents some results.
 
 \subsection{Other Details}
 
@@ -440,21 +440,21 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 
 Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though the former is doing no useful work (and on \emph{make} DynamoRio can utilize multiple cores). On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Therefore we expect a record-and-replay tool built with DynamoRio-like code instrumentation to have significantly higher overhead than \system{}.
 
-\subsection{Space Usage}
+\subsection{Space Usage} \label{space-results}
 
 \system{} traces contain three kinds of data:
 \begin{itemize}
-\item Cloned (or hard-linked) files used by mmap operations
+\item Cloned (or hard-linked) files used for memory-map operations
 \item Cloned file blocks
 \item All other trace data, especially event metadata and the results of general system calls
 \end{itemize}
 
-The cloned files are almost entirely just the executables and libraries loaded by tracees. As long as those files don't change and are not removed, which is generally true in practice, their clones take up no additional space. For simplicity, \system{} makes no attempt to eliminate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice.
+Memory-mapped files are almost entirely just the executables and libraries loaded by tracees. As long as the original files don't change and are not removed, which is usually true in practice, their clones take up no additional space and require no data writes. For simplicity, \system{} makes no attempt to eliminate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice.
 
 \begin{table*}[t]
   \centering
   \begin{tabular}{lrrr}
-Workload & \shortstack[r]{Compressed trace \\ MB/s} & Compression ratio & \shortstack[r]{Cloned blocks \\ MB/s} \\
+Workload & \shortstack[r]{Compressed trace \\ MB/s} & \shortstack[r]{{\tt deflate} \\ compression ratio} & \shortstack[r]{Cloned blocks \\ MB/s} \\
 \hline
 cp & 19.77 & 4.89 & 611.82 \\
 make & 15.71 & 8.38 & 5.49 \\
@@ -466,7 +466,7 @@ sambatest & 6.58 & 21.98 & 0.41 \\
   \label{space-usage-table}
 \end{table*}
 
-Table \ref{space-usage-table} shows the space usage of each workload, in megabytes per second for the general trace data and the cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the baseline configuration of the workload. The space consumed by each trace shows very little variation between runs.
+Table \ref{space-usage-table} shows the space usage of each workload, in megabytes per second, for the general trace data and the cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the baseline configuration of the workload. The space consumed by each trace shows very little variation between runs.
 
 Like cloned files, cloned file blocks do not consume space as long as the underlying data they're cloned from persists.
 
