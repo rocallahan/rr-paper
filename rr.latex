@@ -9,7 +9,7 @@
 \begin{document}
 
 \title{\bf Lightweight User-Space Record And Replay}
-\author{Paper \# 123}
+\author{Paper \#49}
 \date{}
 \maketitle
 \thispagestyle{empty}
@@ -22,7 +22,7 @@ enables many applications, such as reverse-execution debugging,
 debugging of hard-to-reproduce test failures, and ``black box''
 forensic analysis of failures in deployed systems. Existing
 record and replay approaches rely on recording an entire virtual machine
-(which is heavyweight), modifying the OS kernel (which adds deployment and maintainence costs),
+(which is heavyweight), modifying the OS kernel (which adds deployment and maintenance costs),
 or pervasive code instrumentation (which
 imposes significant performance and complexity overhead). We investigated
 whether it is possible to build a practical record and reply system that avoids
@@ -438,7 +438,7 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 \label{dynamorio-chart}
 \end{figure}
 
-Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though the former is doing no useful work (and on \emph{make} DynamoRio can utilize multiple cores). On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Therefore we expect a record-and-replay tool built with DynamoRio-like code instrumentation to have significantly higher overhead than \system{}.
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
 
 \subsection{Space Usage} \label{space-results}
 
@@ -561,7 +561,7 @@ Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} 
 
 Approaches based on user-space interception of system calls have existed since at least MEC \cite{Chastain1999}, and later Jockey \cite{Saito2005}. Those systems did not handle asynchronous event timing. PinPlay \cite{Patil2010}, iDNA \cite{Bhansali2006}, UndoDB \cite{UndoDB} and TotalView ReplayEngine \cite{Gottbrath2008} use code instrumentation to record and replay asynchronous event timing. Unlike UndoDB and \system{}, PinPlay and iDNA instrument all loads, thus supporting parallel recording in the presence of data races and avoiding having to compute the effects of system calls, but this gives them higher overhead than the other systems.
 
-As far as we know \system{} is the only pure user-space record-and-replay system to date that eschews code instrumentation in favour of hardware performance counters for asynchronous event timing, and has the lowest overhead among such systems.
+As far as we know \system{} is the only pure user-space record-and-replay system to date that eschews code instrumentation in favour of hardware performance counters for asynchronous event timing, and has the lowest overhead of the pure user-space systems.
 
 \subsection{Higher-Level Replay}
 
