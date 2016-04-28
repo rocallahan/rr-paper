@@ -485,7 +485,7 @@ The different workloads have highly varying space consumption rates, but several
 As discussed in Section \ref{counters}, \system{} uses hardware performance
 counters to measure application progress. We need a counter that
 increments very frequently so that the pair (counter, general purpose registers)
-uniquely identifies a program execution point in practice, and it must be ``deterministic'' as described earlier
+uniquely identifies a program execution point in practice, and it must be ``deterministic'' as described earlier.
 Performance counters are typically used for statistical analysis, which does not
 need this determinism property, so unsurprisingly it does not hold
 for most performance counter implementations \cite{Weaver2013}. We are indeed fortunate that there is one satisfactory counter in Intel's modern Core models.
