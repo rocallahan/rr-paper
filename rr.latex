@@ -306,7 +306,7 @@ instruction.
 
 Some common system calls sometimes block (e.g. {\tt read} on an empty pipe). Because \system{} runs
 tracee threads one at a time, if a thread enters a blocking system call without notifying \system{}, it
-will hang and could cause the entire recording to deadlock (e.g. if another tracee thread is waiting to
+will hang and could cause the entire recording to deadlock (e.g. if another tracee thread is about to
 {\tt write} to the pipe). We need the kernel to notify \system{} and suspend the tracee thread whenever
 it blocks in an untraced system call, to ensure we get a chance to schedule a different tracee thread.
 
@@ -442,7 +442,7 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}
 \footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}.
 
-\subsection{Disk Space Usage} \label{space-results}
+\subsection{Storage Space Usage} \label{space-results}
 
 \system{} traces contain three kinds of data:
 \begin{itemize}
