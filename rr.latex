@@ -28,7 +28,7 @@ imposes significant performance and complexity overhead). We investigated
 whether it is possible to build a practical record and reply system that avoids
 these issues. The answer turns out to be yes --- if the CPU and
 operating system meet certain
-non-obvious constraints. Fortunately modern Intel x86 CPUs and modern stock Linux
+non-obvious constraints. Fortunately modern Intel CPUs and modern stock Linux
 kernels and user-space frameworks meet these constraints, although this has only become true recently. With
 some novel optimizations, our system \system{} [not the real name; anonymized for
 review] records and replays real-world workloads
@@ -51,10 +51,9 @@ a modified OS kernel, which is a major barrier for users
 and adds security and stability risk to the system. Some approaches \cite{Hower2008,Montesinos2008,Pokam2013} require custom hardware not yet available. Many approaches \cite{UndoDB,Bhansali2006,Gottbrath2008,Patil2010} require
 pervasive instrumentation of code, which adds complexity and overhead, especially for self-modifying code (commonly used in polymorphic inline caching and other implementation techniques in modern just-in-time compilers). A performant dynamic code instrumentation engine is also expensive to build and maintain.
 
-We set out to build a system that maximizes deployability by avoiding these all issues: to record and replay
+We set out to build a system that maximizes deployability by avoiding all these issues: to record and replay
 unmodified user-space applications on stock Linux kernels and x86/x86-64 CPUs, running without special
-privileges, and without using pervasive code instrumentation. We assume that applications should run
-unmodified, and will have bugs (including data races) that we wish to faithfully record
+privileges, and without using pervasive code instrumentation. We assume that \system{} should run unmodified applications, and they will have bugs (including data races) that we wish to faithfully record
 and replay, but these applications will not maliciously try to subvert recording or replay.
 We combine techniques already known, but not previously demonstrated working together in a practical
 system: primarily, using {\tt ptrace} to record and replay system call results and signals,
@@ -67,7 +66,7 @@ With the basic functionality in place, we discovered that the main performance b
 our applications was the
 context switching required by using {\tt ptrace} to monitor system calls. We implemented
 a novel {\it system-call buffering} optimization to eliminate those context switches, dramatically
-reducing recording and replay overhead. This optimization relies on modern Linux kernel
+reducing recording and replay overhead on important real-world workloads. This optimization relies on modern Linux kernel
 features: {\tt seccomp-bpf} to selectively suppress {\tt ptrace} traps for certain system
 calls, and {\tt perf} context-switch events to detect recorded threads blocking in the kernel.
 Section \ref{syscallbuf} describes this work, and Section \ref{results} gives some performance
@@ -112,7 +111,7 @@ operations, and future related operations, are replayed. We do create one replay
 recorded thread (not strictly necessary), and we create one replay address
 space (i.e. process) per recorded address space, along with matching memory mappings.
 
-With this design, the interface between user-space and the kernel is our recording boundary.
+With this design, our recording boundary is the interface between user-space and the kernel.
 The inputs and sources of nondeterminism are mainly the results of system calls, and the timing of
 asynchronous events.
 
@@ -179,7 +178,7 @@ caches, the state of page tables, or speculative CPU state). As noted in previou
 most CPU performance counters in practice. For example it does not hold for any ``instructions retired''
 counter on any known x86 CPU model, because (among other reasons) an instruction triggering a page fault is restarted and counted twice.
 
-Fortunately, modern Intel CPUs have exactly deterministic one performance counter: ``retired conditional branches'', so
+Fortunately, modern Intel CPUs have exactly one deterministic performance counter: ``retired conditional branches'', so
 we use that. We can't just count the number of RCBs during recording and deliver the signal after we've
 executed that number of RCBs during replay, because the RCB count does not uniquely determine the execution point to
 deliver the signal at. Therefore we pair the RCB count with the complete state of general-purpose registers (including the program counter)
@@ -219,7 +218,7 @@ is {\tt RDTSC}, which reads a time-stamp counter. This particular instruction is
 CPU can be configured to trap on an {\tt RDTSC} and Linux exposes this via a {\tt prctl} API, so we can
 trap, emulate and record each {\tt RDTSC}.
 
-Other new-ish x86 instructions are harder to handle. {\tt RDRAND} generates random numbers and hopefully is
+Other relatively recent x86 instructions are harder to handle. {\tt RDRAND} generates random numbers and hopefully is
 not deterministic. We have only encountered it being used in one place in GNU {\tt libstdc++}, so \system{} patches that explicitly. {\tt XBEGIN} and associated instructions
 support hardware transactional memory. These are nondeterministic from the point of view of user space, since
 a hardware transaction can succeed or fail depending on CPU cache state. Fortunately so far we have only
@@ -287,7 +286,7 @@ For simplicity we (try to) redirect all system call instructions to the intercep
 but the library only contains wrappers for the most frequently called system calls. For other system
 calls it falls back to doing a regular {\tt ptrace}-trapping system call.
 
-\subsection{{\tt seccomp-bpf}}
+\subsection{Selectively Trapping System Calls}
 
 The classic {\tt ptrace} system-call interception API triggers traps for all system calls, but our
 interception library needs to avoid traps for selected system calls. Fortunately,
@@ -303,12 +302,13 @@ every system call --- except when the program counter is at the untraced instruc
 the call is allowed. Whenever the interception library needs to make an untraced system call, it uses that
 instruction.
 
-\subsection{Blocking System Calls}
+\subsection{Detecting Blocked System Calls}
 
-Some common system calls (e.g. {\tt read}) sometimes block. Because \system{} runs tracee threads one at
-a time, if a thread enters a blocking system call without notifying \system{}, it will hang and could
-cause the entire recording to deadlock. We need the kernel to notify \system{} and suspend the tracee thread whenever it blocks
-in an untraced system call, to ensure we get a chance to schedule a different tracee thread.
+Some common system calls sometimes block (e.g. {\tt read} on an empty pipe). Because \system{} runs
+tracee threads one at a time, if a thread enters a blocking system call without notifying \system{}, it
+will hang and could cause the entire recording to deadlock (e.g. if another tracee thread is waiting to
+{\tt write} to the pipe). We need the kernel to notify \system{} and suspend the tracee thread whenever
+it blocks in an untraced system call, to ensure we get a chance to schedule a different tracee thread.
 
 We can do this using the Linux {\tt perf} event system to monitor {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES}.
 One of these events occurs every time the kernel deschedules a thread from a CPU core. 
@@ -345,7 +345,7 @@ buffer. If we perform the first copy during replay, we'll overwrite the trace bu
 holding the system call results we need. During replay we turn that copy into a no-op using
 a conditional move to set the source address copy to the destination address.
 
-We could allowing the replay behavior of the interception library to diverge further from its
+We could allow the replay behavior of the interception library to diverge further from its
 recording behavior, but it would have to be done very carefully. At least we'd have to ensure
 the number of retired conditional branches was identical along both paths, and that register values
 were consistent whenever we exit the interception library or trap to \system{} within the
@@ -366,6 +366,7 @@ Our results address the following questions:
 \item What are the impacts of the system-call buffering and block cloning optimizations?
 \item What is the impact of not having to instrument code?
 \item How much space do \system{} traces consume?
+\item [TODO:] What is the memory overhead of \system{} recording and replay, across different kinds of workloads?
 \end{itemize}
 
 \subsection{Workloads}
@@ -378,7 +379,7 @@ We present a variety of workloads to illuminate \system{}'s strengths and weakne
 
 \emph{octane} runs the Google Octane benchmark under the Mozilla Spidermonkey Javascript engine (Mercurial revision 9bd900888753). This illustrates performance on CPU-intensive code in a complex language runtime.
 
-\emph{htmltest} runs the Mozilla Firefox HTML forms tests. The harness is excluded from recording (using {\tt mach mochitest -f plain --debugger \system{} dom/html/test/forms}). This is an example from real-world usage. About 30\% of user-space CPU time is in the harness.
+\emph{htmltest} runs the Mozilla Firefox HTML forms tests (Mercurial revision 9bd900888753). The harness is excluded from recording (using {\tt mach mochitest -f plain --debugger \system{} dom/html/test/forms}). This is an example from real-world usage. About 30\% of user-space CPU time is in the harness.
 
 \emph{sambatest} runs a Samba (git revision 9ee4678b) UDP echo test via {\tt make test TESTS=samba4.echo.udp}. This is an example from real-world usage.
 
@@ -389,7 +390,7 @@ All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RA
 \begin{table*}[t]
   \centering
   \begin{tabular}{lrrrrrrrr}
-Workload & \shortstack[r]{Baseline \\ duration (s)} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio \\
+Workload & \shortstack[r]{Baseline \\ duration (s)} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio-null \\
 \hline
 cp & 1.00 & 1.78 & 0.90 & 1.00 & 23.70 & 14.86 & 4.36 & 1.29 \\
 make & 21.03 & 8.06 & 12.11 & 3.44 & 11.64 & 14.51 & 7.98 & 11.17 \\
@@ -408,7 +409,7 @@ Each test was run six times, discarding the first result and reporting the geome
 
 ``Record no-syscallbuf'' and ``Replay no-syscallbuf'' report overhead with the system-call buffering optimization disabled (which also disables block cloning). ``Record no-cloning'' reports overhead with just block cloning disabled.
 
-``DynamoRio'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
+``DynamoRio-null'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
 
 \subsection{Observations}
 
@@ -434,13 +435,14 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 
 \begin{figure}[t]
 \includegraphics[scale=0.5]{DynamoRio}
-\caption{Comparison With DynamoRio}
+\caption{Comparison With DynamoRio-null}
 \label{dynamorio-chart}
 \end{figure}
 
-Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}
+\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}.
 
-\subsection{Space Usage} \label{space-results}
+\subsection{Disk Space Usage} \label{space-results}
 
 \system{} traces contain three kinds of data:
 \begin{itemize}
@@ -483,7 +485,7 @@ The different workloads have highly varying space consumption rates, but several
 As discussed in Section \ref{counters}, \system{} uses hardware performance
 counters to measure application progress. We need a counter that
 increments very frequently so that the pair (counter, general purpose registers)
-uniquely identifies a program execution point in practice, and it must be ``deterministic'' as described earlier.
+uniquely identifies a program execution point in practice, and it must be ``deterministic'' as described earlier
 Performance counters are typically used for statistical analysis, which does not
 need this determinism property, so unsurprisingly it does not hold
 for most performance counter implementations \cite{Weaver2013}. We are indeed fortunate that there is one satisfactory counter in Intel's modern Core models.
@@ -587,7 +589,7 @@ Supporting recording and replay of parallel shared-memory applications with pote
 
 \section{Conclusions}
 
-The current state of Linux on commodity x86 CPUs enables single-core user-space record and replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented relay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. Further fundamental improvements will likely require hardware support for record-and-replay of parallel programs.
+The current state of Linux on commodity x86 CPUs enables single-core user-space record and replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented replay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. Further fundamental improvements will likely require hardware support for record-and-replay of parallel programs.
 
 \bibliography{Master}
 \bibliographystyle{abbrv} 
