@@ -390,13 +390,13 @@ All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RA
 \begin{table*}[t]
   \centering
   \begin{tabular}{lrrrrrrrr}
-Workload & \shortstack[r]{Baseline \\ duration (s)} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio-null \\
+Workload & \shortstack[r]{Baseline \\ duration} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio-null \\
 \hline
-cp & 1.00 & 1.78 & 0.90 & 1.00 & 23.70 & 14.86 & 4.36 & 1.29 \\
-make & 21.03 & 8.06 & 12.11 & 3.44 & 11.64 & 14.51 & 7.98 & 11.17 \\
-octane & 32.68 & 1.84 & 1.59 & 1.38 & 2.68 & 2.46 & 1.79 & crash \\
-htmltest & 27.60 & 1.50 & 0.91 & 1.08 & 4.32 & 3.13 & 1.50 & 13.48 \\
-sambatest & 32.87 & 1.40 & 1.22 & 0.94 & 2.07 & 1.71 & 1.39 & 1.44 \\
+cp & 1.00s & 1.78$\times$ & 0.90$\times$ & 1.00$\times$ & 23.70$\times$ & 14.86$\times$ & 4.36$\times$ & 1.29$\times$ \\
+make & 21.03s & 8.06$\times$ & 12.11$\times$ & 3.44$\times$ & 11.64$\times$ & 14.51$\times$ & 7.98$\times$ & 11.17$\times$ \\
+octane & 32.68s & 1.84$\times$ & 1.59$\times$ & 1.38$\times$ & 2.68$\times$ & 2.46$\times$ & 1.79$\times$ & crash \\
+htmltest & 27.60s & 1.50$\times$ & 0.91$\times$ & 1.08$\times$ & 4.32$\times$ & 3.13$\times$ & 1.50$\times$ & 13.48$\times$ \\
+sambatest & 32.87s & 1.40$\times$ & 1.22$\times$ & 0.94$\times$ & 2.07$\times$ & 1.71$\times$ & 1.39$\times$ & 1.44$\times$ \\
   \end{tabular}
   \caption{Run-time Overhead}
   \label{run-time-overhead-table}
@@ -421,7 +421,7 @@ Overhead on \emph{make} is significantly higher than for the other workloads. Ju
 \label{run-time-overhead-chart}
 \end{figure}
 
-Figure \ref{run-time-overhead-chart} shows the overall recording and replay overhead for workloads other than \emph{make}. Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding \emph{make}, \system{}'s replay overhead is lower than its recording overhead and replay can even be faster than normal execution. For these workloads this is mainly because during replay most system calls do no work. For interactive applications, not represented here, replay can take much less time than the original execution because idle periods are eliminated.
+Figure \ref{run-time-overhead-chart} shows the overall recording and replay overhead for workloads other than \emph{make}. Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding \emph{make}, \system{}'s replay overhead is lower than its recording overhead. Replay is even be faster than normal execution, in \emph{cp} because system calls do less work and in \emph{htmltest} because replay does not execute the test harness. For interactive applications, not represented here, replay can take much less time than the original execution because idle periods are eliminated.
 
 \emph{octane} is the only workload here other than \emph{make} making significant use of multiple cores, and this accounts for the majority of \system{}'s overhead on \emph{octane}.
 
@@ -458,11 +458,11 @@ Memory-mapped files are almost entirely just the executables and libraries loade
   \begin{tabular}{lrrr}
 Workload & \shortstack[r]{Compressed trace \\ MB/s} & \shortstack[r]{{\tt deflate} \\ compression ratio} & \shortstack[r]{Cloned blocks \\ MB/s} \\
 \hline
-cp & 19.77 & 4.89 & 611.82 \\
-make & 15.71 & 8.38 & 5.49 \\
-octane & 0.08 & 8.36 & 0.00 \\
-htmltest & 0.67 & 5.97 & 0.00 \\
-sambatest & 6.58 & 21.98 & 0.41 \\
+cp & 19.77 & 4.89$\times$ & 611.82 \\
+make & 15.71 & 8.38$\times$ & 5.49 \\
+octane & 0.08 & 8.36$\times$ & 0.00 \\
+htmltest & 0.67 & 5.97$\times$ & 0.00 \\
+sambatest & 6.58 & 21.98$\times$ & 0.41 \\
   \end{tabular}
   \caption{Space Usage}
   \label{space-usage-table}

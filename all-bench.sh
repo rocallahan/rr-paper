@@ -1,5 +1,8 @@
 #!/usr/bin/bash
 
+MEASURE=time
+# MEASURE=$HOME/rampage/target/release/rampage
+
 rm -rf traces/*
 
 bash rr-bench-make.sh >& output-make
