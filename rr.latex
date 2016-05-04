@@ -21,18 +21,19 @@ The ability to record and replay program executions with low overhead
 enables many applications, such as reverse-execution debugging,
 debugging of hard-to-reproduce test failures, and ``black box''
 forensic analysis of failures in deployed systems. Existing
-record and replay approaches rely on recording an entire virtual machine
+record-and-replay approaches rely on recording an entire virtual machine
 (which is heavyweight), modifying the OS kernel (which adds deployment and maintenance costs),
 or pervasive code instrumentation (which
 imposes significant performance and complexity overhead). We investigated
-whether it is possible to build a practical record and reply system that avoids
+whether it is possible to build a practical record-and-replay system avoiding all
 these issues. The answer turns out to be yes --- if the CPU and
 operating system meet certain
-non-obvious constraints. Fortunately modern Intel CPUs and modern stock Linux
+non-obvious constraints. Fortunately modern Intel CPUs, Linux
 kernels and user-space frameworks meet these constraints, although this has only become true recently. With
 some novel optimizations, our system \system{} [not the real name; anonymized for
 review] records and replays real-world workloads
-with low overhead. \system{} forms the basis
+with low overhead with an entirely user-space implementation running on stock hardware
+and operating systems. \system{} forms the basis
 of an open-source reverse-execution debugger seeing significant use in practice.
 We present the design and implementation of \system{}, describe its performance on a
 variety of workloads, and identify constraints on hardware and operating system design required
@@ -52,7 +53,7 @@ and adds security and stability risk to the system. Some approaches \cite{Hower2
 pervasive instrumentation of code, which adds complexity and overhead, especially for self-modifying code (commonly used in polymorphic inline caching and other implementation techniques in modern just-in-time compilers). A performant dynamic code instrumentation engine is also expensive to build and maintain.
 
 We set out to build a system that maximizes deployability by avoiding all these issues: to record and replay
-unmodified user-space applications on stock Linux kernels and x86/x86-64 CPUs, running without special
+unmodified user-space applications on stock Linux kernels and x86/x86-64 CPUs, with a fully user-space implementation running without special
 privileges, and without using pervasive code instrumentation. We assume that \system{} should run unmodified applications, and they will have bugs (including data races) that we wish to faithfully record
 and replay, but these applications will not maliciously try to subvert recording or replay.
 We combine techniques already known, but not previously demonstrated working together in a practical
@@ -76,7 +77,7 @@ We rely on hardware and OS features designed for other goals, so it is surprisin
 \system{} works. In fact, it skirts the edge of feasibility, and in particular
 it cannot be implemented on ARM CPUs. Section \ref{constraints} summarizes \system{}'s hardware and software requirements, which we hope will influence system designers.
 
-\system{} is in daily use by many developers as the foundation of an efficient reverse-execution debugger that works on complex C/C++ applications such as Firefox, QEMU and Wine. It is free software, available at
+\system{} is in daily use by many developers as the foundation of an efficient reverse-execution debugger that works on complex applications such as Samba, Firefox, QEMU, LibreOffice and Wine. It is free software, available at
 [REDACTED]. This paper makes the following research contributions:
 \begin{itemize}
 \item We show that record and replay of Linux user-space processes
@@ -90,7 +91,7 @@ on modern, stock hardware and kernels and without pervasive code instrumentation
 
 \subsection{Summary}
 
-Most low-overhead record and replay systems depend on the observation that CPUs are mostly
+Most low-overhead record-and-replay systems depend on the observation that CPUs are mostly
 deterministic. We identify a boundary around state and computation, record all sources
 of nondeterminism within the boundary and all inputs crossing into the boundary, and reexecute
 the computation within the boundary by replaying the nondeterminism and inputs. If all inputs and
@@ -129,7 +130,7 @@ observed).
 This approach is simple and efficient for applications without much parallelism. It imposes
 significant slowdown for applications with a high degree of parallelism, but those are still relatively
 rare in practice. Low-overhead hardware techniques for recording data races are known \cite{Hower2008,Montesinos2008,Pokam2013}, and we hope
-they will be implemented once the benefits of record and replay are more widely appreciated.
+they will be implemented once the benefits of record-and-replay are more widely appreciated.
 
 \subsection{System Calls} \label{syscalls}
 
@@ -171,7 +172,7 @@ two modifications to work in practice.
 
 \subsubsection{Nondeterministic Performance Counters} \label{counters}
 
-Measuring user-space progress with a hardware performance counter for record and replay requires that every time we execute
+Measuring user-space progress with a hardware performance counter for record-and-replay requires that every time we execute
 a given sequence of user-space instructions, the counter value changes by an amount that depends only
 on the instruction sequence, and not any system state unobservable from user space (e.g. the contents of
 caches, the state of page tables, or speculative CPU state). As noted in previous work \cite{Dunlap2002,Weaver2013}, this property (commonly described as ``determinism'') does not hold for
@@ -250,7 +251,7 @@ With these optimizations, in practice trace storage is a non-issue. Section \ref
 
 \subsection{Other Details}
 
-Apart from those major issues, many other details are required to build a complete record and replay system, too many
+Apart from those major issues, many other details are required to build a complete record-and-replay system, too many
 to mention here. Some system calls (e.g. {\tt execve}) are especially complex to handle. Recording and
 replaying signal delivery are complex, partly because signal delivery has poorly-documented side effects on
 user-space memory. Advanced Linux kernel features such as {\tt unshare}
@@ -366,7 +367,6 @@ Our results address the following questions:
 \item What are the impacts of the system-call buffering and block cloning optimizations?
 \item What is the impact of not having to instrument code?
 \item How much space do \system{} traces consume?
-\item [TODO:] What is the memory overhead of \system{} recording and replay, across different kinds of workloads?
 \end{itemize}
 
 \subsection{Workloads}
@@ -383,20 +383,20 @@ We present a variety of workloads to illuminate \system{}'s strengths and weakne
 
 \emph{sambatest} runs a Samba (git revision 9ee4678b) UDP echo test via {\tt make test TESTS=samba4.echo.udp}. This is an example from real-world usage.
 
-All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU, 16GB RAM and a 512GB SSD using Btrfs in Fedora Core 23 Linux.
+All tests run on a Dell XPS15 laptop with a quad-core Intel Skylake CPU (8 SMT threads), 16GB RAM and a 512GB SSD using Btrfs in Fedora Core 23 Linux.
 
 \subsection{Overhead}
 
 \begin{table*}[t]
   \centering
   \begin{tabular}{lrrrrrrrr}
-Workload & \shortstack[r]{Baseline \\ duration} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & DynamoRio-null \\
+Workload & \shortstack[r]{Baseline \\ duration} & Record & Replay & \shortstack[r]{Single \\ core} & \shortstack[r]{Record \\ no-syscallbuf} & \shortstack[r]{Replay \\ no-syscallbuf} & \shortstack[r]{Record \\ no-cloning} & \shortstack[r]{DynamoRio- \\ null} \\
 \hline
-cp & 1.00s & 1.78$\times$ & 0.90$\times$ & 1.00$\times$ & 23.70$\times$ & 14.86$\times$ & 4.36$\times$ & 1.29$\times$ \\
-make & 21.03s & 8.06$\times$ & 12.11$\times$ & 3.44$\times$ & 11.64$\times$ & 14.51$\times$ & 7.98$\times$ & 11.17$\times$ \\
-octane & 32.68s & 1.84$\times$ & 1.59$\times$ & 1.38$\times$ & 2.68$\times$ & 2.46$\times$ & 1.79$\times$ & crash \\
-htmltest & 27.60s & 1.50$\times$ & 0.91$\times$ & 1.08$\times$ & 4.32$\times$ & 3.13$\times$ & 1.50$\times$ & 13.48$\times$ \\
-sambatest & 32.87s & 1.40$\times$ & 1.22$\times$ & 0.94$\times$ & 2.07$\times$ & 1.71$\times$ & 1.39$\times$ & 1.44$\times$ \\
+cp & 1.04s & 1.49$\times$ & 0.72$\times$ & 0.98$\times$ & 24.53$\times$ & 15.39$\times$ & 3.68$\times$ & 1.24$\times$ \\
+make & 20.99s & 7.85$\times$ & 11.93$\times$ & 3.36$\times$ & 11.32$\times$ & 14.36$\times$ & 7.84$\times$ & 10.97$\times$ \\
+octane & 32.73s & 1.79$\times$ & 1.56$\times$ & 1.36$\times$ & 2.65$\times$ & 2.43$\times$ & 1.80$\times$ & crash \\
+htmltest & 23.74s & 1.49$\times$ & 1.01$\times$ & 1.07$\times$ & 4.66$\times$ & 3.43$\times$ & 1.50$\times$ & 14.03$\times$ \\
+sambatest & 31.75s & 1.57$\times$ & 1.23$\times$ & 0.95$\times$ & 2.23$\times$ & 1.74$\times$ & 1.57$\times$ & 1.43$\times$ \\
   \end{tabular}
   \caption{Run-time Overhead}
   \label{run-time-overhead-table}
@@ -416,17 +416,19 @@ Each test was run six times, discarding the first result and reporting the geome
 Overhead on \emph{make} is significantly higher than for the other workloads. Just forcing \emph{make} onto a single core imposes major slowdown. Also, \emph{make} creates many short-lived processes; it forks and execs 2430 processes. (The next most prolific workload is \emph{sambatest} with 89.) Our system-call buffering optimization only starts working in a process once \system{}'s preload library has been loaded, but typically at least 80 system calls are performed before that completes, so the effectiveness of system-call buffering is limited with short-lived processes.
 
 \begin{figure}[t]
-\includegraphics[scale=0.5]{RecordReplay}
+\includegraphics[scale=0.4]{RecordReplay}
 \caption{Run-time Overhead Excluding \emph{make}}
 \label{run-time-overhead-chart}
 \end{figure}
 
-Figure \ref{run-time-overhead-chart} shows the overall recording and replay overhead for workloads other than \emph{make}. Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding \emph{make}, \system{}'s replay overhead is lower than its recording overhead. Replay is even be faster than normal execution, in \emph{cp} because system calls do less work and in \emph{htmltest} because replay does not execute the test harness. For interactive applications, not represented here, replay can take much less time than the original execution because idle periods are eliminated.
+Figure \ref{run-time-overhead-chart} shows the overall recording and replay overhead for workloads other than \emph{make}. Error bars in all figures show a 95\% confidence interval; these results are highly stable across runs.
+
+Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding \emph{make}, \system{}'s replay overhead is lower than its recording overhead. Replay can even be faster than normal execution, in \emph{cp} because system calls do less work. For interactive applications, not represented here, replay can take much less time than the original execution because idle periods are eliminated.
 
 \emph{octane} is the only workload here other than \emph{make} making significant use of multiple cores, and this accounts for the majority of \system{}'s overhead on \emph{octane}.
 
 \begin{figure}[t]
-\includegraphics[scale=0.5]{Optimizations}
+\includegraphics[scale=0.4]{Optimizations}
 \caption{Impact Of Optimizations}
 \label{optimizations-chart}
 \end{figure}
@@ -434,12 +436,12 @@ Figure \ref{run-time-overhead-chart} shows the overall recording and replay over
 Figure \ref{optimizations-chart} shows the impact of system-call buffering and blocking cloning on recording. The system-call buffering optimization produces a large reduction in recording (and replay) overhead. Cloning file data blocks is a major improvement for \emph{cp} recording but has essentially no effect on the other workloads.
 
 \begin{figure}[t]
-\includegraphics[scale=0.5]{DynamoRio}
+\includegraphics[scale=0.4]{DynamoRio}
 \caption{Comparison With DynamoRio-null}
 \label{dynamorio-chart}
 \end{figure}
 
-Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, perhaps because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}
 \footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}.
 
 \subsection{Storage Space Usage} \label{space-results}
@@ -473,10 +475,6 @@ Table \ref{space-usage-table} shows the space usage of each workload, in megabyt
 Like cloned files, cloned file blocks do not consume space as long as the underlying data they're cloned from persists.
 
 The different workloads have highly varying space consumption rates, but several megabytes per second is easy for modern systems to handle. Compression ratios vary depending on the kind of data being handled by the workload. In any case, in real-world usage trace storage has not been a concern.
-
-[TODO: show a graph for space usage? Which one?]
-
-[TODO: compute and show variance for runtime overhead and space usage results?]
 
 \section{Hardware And Software Design Constraints} \label{constraints}
 
@@ -515,7 +513,7 @@ Trapping and emulating {\tt CPUID} is also necessary to support trace portabilit
 across machines with different CPU models and would let us avoid
 pinning recording and replay to a specific core.
 
-We would like to support record and replay of programs using hardware transactional
+We would like to support record-and-replay of programs using hardware transactional
 memory ({\tt XBEGIN}/{\tt XEND}). This could be done efficiently if the hardware
 and OS could be configured to raise a signal on any failed transaction.
 
@@ -553,11 +551,11 @@ Any efficient record-and-replay system depends on clearly identifying a boundary
 
 \subsection{Whole-System Replay}
 
-ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMWare \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMWare Workstation, for a time, but discontinued the feature. The full-system simulator Simics has long supported reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been multiple independent efforts to add some amount of record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011}. Whole-system record and replay can be useful, but for many users it is inconvenient to have to hoist the application into a virtual machine. Many applications of record-and-replay also require cheap checkpointing, and checkpointing an entire system is generally more expensive than checkpointing one or a few processes.
+ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMWare \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMWare Workstation, for a time, but discontinued the feature. The full-system simulator Simics has long supported reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been multiple independent efforts to add some amount of record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011}. Whole-system record-and-replay can be useful, but for many users it is inconvenient to have to hoist the application into a virtual machine. Many applications of record-and-replay also require cheap checkpointing, and checkpointing an entire system is generally more expensive than checkpointing one or a few processes.
 
 \subsection{Replaying User-Space With Kernel Support}
 
-Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Requiring kernel changes makes maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if record and replay can be well implemented outside the kernel, moving it into the kernel may not be desirable.
+Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Requiring kernel changes makes maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if record-and-replay can be well implemented outside the kernel, moving it into the kernel may not be desirable.
 
 \subsection{Pure User-Space Replay}
 
@@ -579,7 +577,7 @@ The best hope for general low-overhead parallel recording seems to be hardware s
 
 \system{} perturbs execution, especially by forcing all threads onto a single core, and therefore can fail to reproduce bugs that manifest outside \system{}. We have addressed this problem by introducing a ``chaos mode'' that intelligently adds randomness to scheduling decisions, enabling us to reproduce many more bugs, but that work is beyond the scope of this paper. There are many more opportunities to enhance the recorder to find more bugs.
 
-Putting record and replay support in the kernel has performance benefits, e.g. reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record and replay while being less invasive than a full kernel implementation.
+Putting record-and-replay support in the kernel has performance benefits, e.g. reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation.
 
 Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008} or dthreads \cite{Liu2011} may perform adequately for some workloads.
 
@@ -589,7 +587,7 @@ Supporting recording and replay of parallel shared-memory applications with pote
 
 \section{Conclusions}
 
-The current state of Linux on commodity x86 CPUs enables single-core user-space record and replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented replay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. Further fundamental improvements will likely require hardware support for record-and-replay of parallel programs.
+The current state of Linux on commodity x86 CPUs enables single-core user-space record-and-replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented replay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. Further fundamental improvements will likely require hardware support for record-and-replay of parallel programs.
 
 \bibliography{Master}
 \bibliographystyle{abbrv} 
