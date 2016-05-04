@@ -455,10 +455,10 @@ Figure \ref{dynamorio-chart} compares \system{} recording overhead with the over
 
 Memory-mapped files are almost entirely just the executables and libraries loaded by tracees. As long as the original files don't change and are not removed, which is usually true in practice, their clones take up no additional space and require no data writes. For simplicity, \system{} makes no attempt to eliminate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice.
 
-\begin{table*}[t]
+\begin{table}[t]
   \centering
   \begin{tabular}{lrrr}
-Workload & \shortstack[r]{Compressed trace \\ MB/s} & \shortstack[r]{{\tt deflate} \\ compression ratio} & \shortstack[r]{Cloned blocks \\ MB/s} \\
+Workload & \shortstack[r]{Compressed \\ MB/s} & \shortstack[r]{{\tt deflate} \\ ratio} & \shortstack[r]{Cloned blocks \\ MB/s} \\
 \hline
 cp & 18.99 & 4.90$\times$ & 586.14 \\
 make & 15.80 & 8.33$\times$ & 5.50 \\
@@ -466,15 +466,42 @@ octane & 0.08 & 8.34$\times$ & 0.00 \\
 htmltest & 0.78 & 5.94$\times$ & 0.00 \\
 sambatest & 6.84 & 21.88$\times$ & 0.00 \\
   \end{tabular}
-  \caption{Space Usage}
+  \caption{Storage Space Usage}
   \label{space-usage-table}
-\end{table*}
+\end{table}
 
 Table \ref{space-usage-table} shows the space usage of each workload, in megabytes per second, for the general trace data and the cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the baseline configuration of the workload. The space consumed by each trace shows very little variation between runs.
 
 Like cloned files, cloned file blocks do not consume space as long as the underlying data they're cloned from persists.
 
 The different workloads have highly varying space consumption rates, but several megabytes per second is easy for modern systems to handle. Compression ratios vary depending on the kind of data being handled by the workload. In any case, in real-world usage trace storage has not been a concern.
+
+\subsection{Memory Usage}
+
+\begin{table}[t]
+  \centering
+  \begin{tabular}{lrrrr}
+Workload & Baseline & Record & Replay & Single core \\
+\hline
+cp & 0.51 & 34.61 & 9.16 & 0.51 \\
+make & 511.88 & 327.12 & 313.97 & 288.81 \\
+octane & 391.51 & 532.60 & 511.18 & 387.55 \\
+htmltest & 689.06 & 698.11 & 329.36 & 689.13 \\
+sambatest & 299.02 & 401.64 & 427.50 & 302.10 \\
+  \end{tabular}
+  \caption{Memory Usage (Peak PSS MB)}
+  \label{mem-usage-table}
+\end{table}
+
+\begin{figure}[t]
+\includegraphics[scale=0.4]{MemUsage}
+\caption{Memory Usage}
+\label{mem-usage-chart}
+\end{figure}
+
+Table \ref{mem-usage-table} shows the memory usage of each workload. Every 10ms we sum the ``PSS'' values of all workload processes (including \system{} if running); we determine the peak values for each run and take their geometric mean. In Linux, each page of memory mapped into a process's address space contributes $1/n$ pages to that process's PSS, where $n$ is the number of processes mapping the page; thus it is meaningful to sum PSS values over processes which share memory. The same data are shown in Figure \ref{mem-usage-chart}.
+
+Given these experiments ran on an otherwise unloaded machine with 16GB RAM, none of these workloads experienced any memory pressure apart from that exerted by OS working set trimming (if any) and the buffer cache. \emph{cp} baseline uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. Comparing \system{} recording to single-core execution, \emph{make} and \emph{htmltest} show almost no memory overhead while \emph{octane} and \emph{sambatest} show more. This is hard to interpret; it may be because the latter have more threads active (nearly) simultaneously, and  most of the memory overhead here is \system{}'s per-thread scratch and system-call buffers, up to 3MB per thread. The most important point is that \system{}'s memory overhead is not large for the non-trivial workloads.
 
 \section{Hardware And Software Design Constraints} \label{constraints}
 
