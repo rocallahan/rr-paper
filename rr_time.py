@@ -1,5 +1,8 @@
 import re
 import sys
+import os;
+import glob;
+import subprocess;
 from math import log, exp, sqrt
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
@@ -216,4 +219,32 @@ ax.set_axisbelow(True)
 ax.yaxis.grid()
 ax.legend([record_rects[0], dynamorio_rects[0]], ['Record', 'DynamoRio-null'], loc = 'right')
 plt.savefig('DynamoRio.pdf')
+
+dump = re.compile("// Uncompressed bytes (\d+), compressed bytes (\d+),.*")
+
+def file_size(path):
+    return os.stat(path).st_size
+
+print
+
+index = 0
+for name in workloads:
+    cloned_blocks_sizes = []
+    compressed_sizes = []
+    uncompressed_sizes = []
+    trace_name = name
+    if name == "sambatest":
+        trace_name = "samba"
+    for i in range(1,6):
+         cloned_blocks = 0
+         for p in glob.iglob("traces/%s-%d/cloned_data_*"%(name,i)):
+             cloned_blocks = cloned_blocks + file_size(p)
+         cloned_blocks_sizes.append(cloned_blocks)
+         line = subprocess.check_output("rr dump -s traces/%s-%d/|grep ^//"%(trace_name,i), shell=True)
+         m = dump.match(line)
+         uncompressed_sizes.append(int(m.group(1)))
+         compressed_sizes.append(int(m.group(2)))
+
+    print "%s & %.2f & %.2f$\\times$ & %.2f \\\\"%(name,geomean(compressed_sizes)/(1024*1024)/baseline_seconds[index],geomean(uncompressed_sizes)/geomean(compressed_sizes),geomean(cloned_blocks_sizes)/(1024*1024)/baseline_seconds[index])
+    index = index + 1
 
