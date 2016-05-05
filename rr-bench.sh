@@ -13,32 +13,34 @@ echo ^^^^ SINGLE-CORE
 
 for i in $(seq 1 $N); do
   $CLEANUP
-  $MEASURE taskset 4 $CMD_SINGLE
+  LD_PRELOAD=$HOME/rr-paper/sysconf-preload.so $MEASURE taskset 4 $CMD_SINGLE
 done
 
-rm -rf $HOME/.local/share/rr
-echo ^^^^ RECORD-NO-SYSCALLBUF
+if [[ $DO_RR_CONFIGS == 1 ]]; then
+  rm -rf $HOME/.local/share/rr
+  echo ^^^^ RECORD-NO-SYSCALLBUF
 
-traces=(dummy)
-for i in $(seq 1 $N); do
-  $CLEANUP
-  $MEASURE $RR_NO_SYSCALLBUF_CMD
-  traces+=(`realpath ~/.local/share/rr/latest-trace`)
-done
+  traces=(dummy)
+  for i in $(seq 1 $N); do
+    $CLEANUP
+    $MEASURE $RR_NO_SYSCALLBUF_CMD
+    traces+=(`realpath ~/.local/share/rr/latest-trace`)
+  done
 
-echo ^^^^ REPLAY-NO-SYSCALLBUF
+  echo ^^^^ REPLAY-NO-SYSCALLBUF
 
-for i in $(seq 1 $N); do
-  $MEASURE rr replay -F -a ${traces[i]}
-done
+  for i in $(seq 1 $N); do
+    $MEASURE rr replay -F -a ${traces[i]}
+  done
 
-rm -rf $HOME/.local/share/rr
-echo ^^^^ RECORD-NO-CLONING
+  rm -rf $HOME/.local/share/rr
+  echo ^^^^ RECORD-NO-CLONING
 
-for i in $(seq 1 $N); do
-  $CLEANUP
-  $MEASURE $RR_NO_CLONING_CMD
-done
+  for i in $(seq 1 $N); do
+    $CLEANUP
+    $MEASURE $RR_NO_CLONING_CMD
+  done
+fi
 
 rm -rf $HOME/.local/share/rr
 echo ^^^^ RECORD
@@ -57,10 +59,12 @@ for i in $(seq 1 $N); do
   mv ${traces[i]} $HOME/rr-paper/traces/$NAME-$i
 done
 
-echo ^^^^ DYNAMORIO
+if [[ $DO_DYNAMORIO == 1 ]]; then
+  echo ^^^^ DYNAMORIO
 
-for i in $(seq 1 $N); do
-  $CLEANUP
-  $MEASURE $DR_CMD
-done
+  for i in $(seq 1 $N); do
+    $CLEANUP
+    $MEASURE $DR_CMD
+  done
+fi
 

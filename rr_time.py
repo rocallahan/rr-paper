@@ -10,6 +10,7 @@ import matplotlib.ticker as ticker
 header = re.compile("\^\^\^\^ ([A-Z-]+)")
 real = re.compile("real ([0-9.]+)")
 pss = re.compile("PeakPss ([0-9]+)kB")
+rrpss = re.compile("rrPss ([0-9]+)kB")
 octane_score = re.compile("Score [^:]+: (\d+)")
 
 workloads = ['cp', 'make', 'octane', 'htmltest', 'sambatest']
@@ -21,6 +22,7 @@ overheads = {}
 mem_pss = {}
 mem_pss_err_min = {}
 mem_pss_err_max = {}
+rr_mem_pss = {}
 overhead_err_min = {}
 overhead_err_max = {}
 for c in configs:
@@ -30,6 +32,7 @@ for c in configs:
     mem_pss[c] = []
     mem_pss_err_min[c] = []
     mem_pss_err_max[c] = []
+    rr_mem_pss[c] = []
 
 baseline_scores = []
 record_scores = []
@@ -54,7 +57,7 @@ def variance(array):
     m = mean(array)
     for a in array:
         s = s + (a - m)*(a - m)
-    return s/len(array)
+    return s/(len(array) - 1)
 
 def flush_header(name, h, times, octane_scores):
     global baseline_scores
@@ -125,6 +128,14 @@ def sample(ws, os):
                 result.append(os[i])
     return result
 
+def sample_diff(ws, os, ds):
+    result = []
+    for w in ws:
+        for i in xrange(len(workloads)):
+            if workloads[i] == w:
+                result.append(os[i] - ds[i])
+    return result
+
 for name in workloads:
     f = open("output-%s"%name, 'r')
     process(name, f)
@@ -137,29 +148,36 @@ for i in xrange(0,len(workloads)):
 
 print
 
-def flush_header_mem(name, h, peak_pss):
+def flush_header_mem(name, h, peak_pss, rr_pss):
     peak_pss.pop(0)
+    rr_pss.pop(0)
 
     m = geomean(peak_pss)
     v = variance(peak_pss)
     mem_pss[h].append(m/1024.0)
     mem_pss_err_min[h].append(z*sqrt(v/len(peak_pss))/1024.0)
     mem_pss_err_max[h].append(z*sqrt(v/len(peak_pss))/1024.0)
+    rr_mem_pss[h].append(geomean(rr_pss)/1024.0)
 
 def process_mem(name, f):
     h = None
     peak_pss = []
+    rr_pss = []
     for line in f:
         m = header.match(line)
         if m:
             if h != None:
-                flush_header_mem(name, h, peak_pss)
+                flush_header_mem(name, h, peak_pss, rr_pss)
             h = m.group(1)
             peak_pss = []
+            rr_pss = []
         m = pss.match(line)
         if m:
             peak_pss.append(float(m.group(1)))
-    flush_header_mem(name, h, peak_pss)
+        m = rrpss.match(line)
+        if m:
+            rr_pss.append(float(m.group(1)))
+    flush_header_mem(name, h, peak_pss, rr_pss)
 
 for name in workloads:
     f = open("mem-%s"%name, 'r')
@@ -271,11 +289,15 @@ plt.rcParams.update({'font.size': 16})
 normal_rects = ax.bar(offset(ind, spacing), sample(plot_workloads, mem_pss['NORMAL']), width, color="black",
   error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['NORMAL']),
         sample(plot_workloads, mem_pss_err_max['NORMAL'])])
-record_rects = ax.bar(offset(ind, spacing + width), sample(plot_workloads, mem_pss['RECORD']), width, color="r",
-  error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['RECORD']),
+minus_rr = sample_diff(plot_workloads, mem_pss['RECORD'], rr_mem_pss['RECORD']);
+record_rects = ax.bar(offset(ind, spacing + width), minus_rr, width, color="r")
+record_rr_rects = ax.bar(offset(ind, spacing + width), sample(plot_workloads, rr_mem_pss['RECORD']), width, color="orange",
+  bottom=minus_rr, error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['RECORD']),
         sample(plot_workloads, mem_pss_err_max['RECORD'])])
-replay_rects = ax.bar(offset(ind, spacing + 2*width), sample(plot_workloads, mem_pss['REPLAY']), width, color="y",
-  error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['REPLAY']),
+minus_rr = sample_diff(plot_workloads, mem_pss['REPLAY'], rr_mem_pss['REPLAY']);
+replay_rects = ax.bar(offset(ind, spacing + 2*width), minus_rr, width, color="y")
+replay_rr_rects = ax.bar(offset(ind, spacing + 2*width), sample(plot_workloads, rr_mem_pss['REPLAY']), width, color="orange",
+  bottom=minus_rr, error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['REPLAY']),
         sample(plot_workloads, mem_pss_err_max['REPLAY'])])
 single_core_rects = ax.bar(offset(ind, spacing + width*3), sample(plot_workloads, mem_pss['SINGLE-CORE']), width, color="magenta",
   error_kw=dict(elinewidth=2),yerr=[sample(plot_workloads, mem_pss_err_min['SINGLE-CORE']),
@@ -288,8 +310,10 @@ ax.set_xticks(offset(ind, 0.5),minor=True)
 ax.set_xticklabels(plot_workloads,minor=True)
 ax.set_axisbelow(True)
 ax.yaxis.grid()
-ax.set_ylim([0,1200])
-ax.legend([normal_rects[0], record_rects[0], replay_rects[0], single_core_rects[0]], ['Baseline', 'Record', 'Replay', 'Single Core'])
+ax.set_ylim([0,1100])
+ax.legend([normal_rects[0], record_rects[0], replay_rects[0], single_core_rects[0],
+           record_rr_rects[0]], ['Baseline', 'Record', 'Replay', 'Single core', 'Supervisor process'],
+          ncol=2)
 plt.savefig('MemUsage.pdf')
 
 dump = re.compile("// Uncompressed bytes (\d+), compressed bytes (\d+),.*")

@@ -128,9 +128,7 @@ switch occurs at the right point in the execution (though bugs due to weak memor
 observed).
 
 This approach is simple and efficient for applications without much parallelism. It imposes
-significant slowdown for applications with a high degree of parallelism, but those are still relatively
-rare in practice. Low-overhead hardware techniques for recording data races are known \cite{Hower2008,Montesinos2008,Pokam2013}, and we hope
-they will be implemented once the benefits of record-and-replay are more widely appreciated.
+significant slowdown for applications with a consistently high degree of parallelism, but those are still relatively uncommon.
 
 \subsection{System Calls} \label{syscalls}
 
@@ -139,8 +137,8 @@ system call allows a process to supervise the execution of other ``tracee'' proc
 and to be synchronously notified when a tracee thread enters or exits a system call. 
 When a tracee thread enters the kernel for a system call, it is suspended and
 \system{} is notified. When \system{} chooses to run that thread again, the system call will complete, notifying
-\system{} again, giving it a chance to record the system call results. \system{} contains a model of most Linux system calls and which user-space
-memory they can modify.
+\system{} again, giving it a chance to record the system call results. \system{} contains a model of most Linux system calls
+describing the user-space memory they can modify, given the system call input parameters and result.
 
 As noted above, \system{} normally avoids races by scheduling only one thread at a time. However,
 if a system call blocks in the kernel, \system{} must try to schedule another application thread to run
@@ -149,6 +147,15 @@ could access the system call's output buffer and race with the kernel's writes t
 system call output buffers to per-thread temporary ``scratch memory'' which is otherwise unused by the application.
 When we get a {\tt ptrace} event for a blocked system call completing, \system{} copies scratch buffer
 contents to the real user-space destination(s) while no other threads are running, eliminating the race.
+
+\begin{figure}[t]
+\centering
+\includegraphics[scale=0.4]{rr-ptrace}
+\caption{Recording Simple System Call}
+\label{simple-syscall}
+\end{figure}
+
+Figure \ref{simple-syscall} illustrates the flow of control recording a simple {\tt read} system call. The gray box represents kernel code.
 
 During replay, when the next event to be replayed is an intercepted system call, we
 set a temporary breakpoint at the address of the system call instruction (recorded in the trace). We use
@@ -260,9 +267,8 @@ the overall approach.
 
 \section{System Call Buffering} \label{syscallbuf}
 
-The approach described in the previous section works well for complex applications such as Firefox, QEMU and LibreOffice.
-However, recording overhead is still disappointingly high. The core problem is that for every tracee system call,
-the tracee performs two {\tt ptrace} traps to \system{}, each causing a context switch from the tracee to \system{} and back, i.e. four context switches per system call. For common system calls such as {\tt gettimeofday} or {\tt read} from cached files,
+The approach described in the previous section works, but overhead is disappointingly high (see Figure \ref{optimizations-chart} below). The core problem is that for every tracee system call,
+as shown in Figure \ref{simple-syscall} the tracee performs four context switches: two blocking {\tt ptrace} notifications, each requiring a context switch from the tracee to \system{} and back. For common system calls such as {\tt gettimeofday} or {\tt read} from cached files,
 the cost of even a single context switch dwarfs the cost of the system call itself. To significantly reduce overhead, we must
 avoid context-switches to \system{} when processing these common system calls.
 
@@ -296,6 +302,15 @@ modern Linux kernels provide a facility for selectively generating {\tt ptrace} 
 access to incoming user-space register values, including the program counter. The filter result directs the kernel to either allow the system call, fail with a given {\tt errno}, kill the target process, or trigger a {\tt ptrace} trap. The overhead of filter execution is
 negligible since filters run directly in the kernel and are even JIT-compiled on most architectures.
 
+\begin{figure}[t]
+\centering
+\includegraphics[scale=0.4]{rr-syscallbuf}
+\caption{Recording With System-call Buffering}
+\label{syscallbuf-diagram}
+\end{figure}
+
+Figure \ref{syscallbuf-diagram} illustrates recording a simple {\tt read} system call with system-call buffering. The solid-border box represents code in the interception library and the grey box represents kernel code.
+
 \system{} injects a special page of memory into every tracee process at a fixed address (immediately after {\tt execve}).
 That page contains a system call instruction --- the ``untraced instruction''.
 \system{} applies a {\tt seccomp-bpf} filter to each recorded process that triggers a {\tt ptrace} trap for
@@ -318,6 +333,17 @@ kernel send a signal to the thread every time the event occurs. These signals tr
 notifications to \system{} while preventing the thread from executing further.
 To avoid spurious signals (e.g. when the thread is descheduled due to normal timeslice expiration), event
 counting is normally disabled and explicitly enabled during an untraced system call that might block.
+
+\begin{figure}[t]
+\centering
+\includegraphics[scale=0.4]{rr-syscallbuf-blocked}
+\caption{Recording A Blocking System Call}
+\label{syscallbuf-blocked-diagram}
+\end{figure}
+
+Figure \ref{syscallbuf-blocked-diagram} illustrates recording a blocking {\tt read} system call with system-call buffering. The kernel deschedules the thread, triggering a {\tt perf} event which sends a signal to the thread, \emph{rescheduling} it, interrupting the system call, and sending a {\tt ptrace} notification to the recorder. The recorder does bookkeeping to note that a buffered system call was interrupted in thread {\it T}, then checks whether any tracee threads in blocking system calls have progressed to a system-call exit and generated a {\tt ptrace} notification. In this example {\it T2} has completed a (not system-call-buffered) blocking {\tt futex} system call, so we resume executing {\it T2}.
+
+Resuming a buffered system call that was interrupted by a signal (e.g. {\it T}'s {\tt read} call in Figure \ref{syscallbuf-blocked-diagram}) is more complicated and requires understanding Linux system call restart semantics, which are too nasty to cover in this paper.
 
 \subsection{Handling Replay}
 
@@ -418,6 +444,7 @@ Overhead on \emph{make} is significantly higher than for the other workloads. Ju
 \begin{figure}[t]
 \includegraphics[scale=0.4]{RecordReplay}
 \caption{Run-time Overhead Excluding \emph{make}}
+\centering
 \label{run-time-overhead-chart}
 \end{figure}
 
@@ -430,6 +457,7 @@ Excluding \emph{make}, \system{}'s recording overhead is less than 2x. Excluding
 \begin{figure}[t]
 \includegraphics[scale=0.4]{Optimizations}
 \caption{Impact Of Optimizations}
+\centering
 \label{optimizations-chart}
 \end{figure}
 
@@ -438,6 +466,7 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 \begin{figure}[t]
 \includegraphics[scale=0.4]{DynamoRio}
 \caption{Comparison With DynamoRio-null}
+\centering
 \label{dynamorio-chart}
 \end{figure}
 
@@ -460,11 +489,11 @@ Memory-mapped files are almost entirely just the executables and libraries loade
   \begin{tabular}{lrrr}
 Workload & \shortstack[r]{Compressed \\ MB/s} & \shortstack[r]{{\tt deflate} \\ ratio} & \shortstack[r]{Cloned blocks \\ MB/s} \\
 \hline
-cp & 18.99 & 4.90$\times$ & 586.14 \\
-make & 15.80 & 8.33$\times$ & 5.50 \\
-octane & 0.08 & 8.34$\times$ & 0.00 \\
-htmltest & 0.78 & 5.94$\times$ & 0.00 \\
-sambatest & 6.84 & 21.88$\times$ & 0.00 \\
+cp & 19.03 & 4.87$\times$ & 586.14 \\
+make & 15.82 & 8.32$\times$ & 5.50 \\
+octane & 0.08 & 8.33$\times$ & 0.00 \\
+htmltest & 0.79 & 5.94$\times$ & 0.00 \\
+sambatest & 6.85 & 21.87$\times$ & 0.00 \\
   \end{tabular}
   \caption{Storage Space Usage}
   \label{space-usage-table}
@@ -483,25 +512,30 @@ The different workloads have highly varying space consumption rates, but several
   \begin{tabular}{lrrrr}
 Workload & Baseline & Record & Replay & Single core \\
 \hline
-cp & 0.51 & 34.61 & 9.16 & 0.51 \\
-make & 511.88 & 327.12 & 313.97 & 288.81 \\
-octane & 391.51 & 532.60 & 511.18 & 387.55 \\
-htmltest & 689.06 & 698.11 & 329.36 & 689.13 \\
-sambatest & 299.02 & 401.64 & 427.50 & 302.10 \\
+cp & 0.51 & 34.54 & 9.11 & 0.51 \\
+make & 510.51 & 327.19 & 314.16 & 288.65 \\
+octane & 419.47 & 610.48 & 588.01 & 392.95 \\
+htmltest & 690.81 & 692.06 & 324.71 & 689.75 \\
+sambatest & 298.68 & 400.49 & 428.79 & 303.03 \\
   \end{tabular}
   \caption{Memory Usage (Peak PSS MB)}
   \label{mem-usage-table}
 \end{table}
 
 \begin{figure}[t]
+\centering
 \includegraphics[scale=0.4]{MemUsage}
 \caption{Memory Usage}
 \label{mem-usage-chart}
 \end{figure}
 
-Table \ref{mem-usage-table} shows the memory usage of each workload. Every 10ms we sum the ``PSS'' values of all workload processes (including \system{} if running); we determine the peak values for each run and take their geometric mean. In Linux, each page of memory mapped into a process's address space contributes $1/n$ pages to that process's PSS, where $n$ is the number of processes mapping the page; thus it is meaningful to sum PSS values over processes which share memory. The same data are shown in Figure \ref{mem-usage-chart}.
+Table \ref{mem-usage-table} shows the memory usage of each workload. Every 10ms we sum the ``PSS'' values of all workload processes (including \system{} if running); we determine the peak values for each run and take their geometric mean. In Linux, each page of memory mapped into a process's address space contributes $1/n$ pages to that process's PSS, where $n$ is the number of processes mapping the page; thus it is meaningful to sum PSS values over processes which share memory. The same data are shown in Figure \ref{mem-usage-chart}. In the figure, the fraction of PSS used by the \system{} process is shown in orange. Memory usage data was gathered in separate runs from the timing data shown above, to ensure the overhead of gathering memory statistics did not impact those results.
 
-Given these experiments ran on an otherwise unloaded machine with 16GB RAM, none of these workloads experienced any memory pressure apart from that exerted by OS working set trimming (if any) and the buffer cache. \emph{cp} baseline uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. Comparing \system{} recording to single-core execution, \emph{make} and \emph{htmltest} show almost no memory overhead while \emph{octane} and \emph{sambatest} show more. This is hard to interpret; it may be because the latter have more threads active (nearly) simultaneously, and  most of the memory overhead here is \system{}'s per-thread scratch and system-call buffers, up to 3MB per thread. The most important point is that \system{}'s memory overhead is not large for the non-trivial workloads.
+Given these experiments ran on an otherwise unloaded machine with 16GB RAM and all data fits in cache, none of these workloads experienced any memory pressure. \emph{cp} baseline uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. In \emph{octane} memory usage is volatile (highly sensitive to small changes in GC behavior) but recording significantly increases application memory usage; recording also increases application memory usage a small amount in \emph{sambatest} but slightly decreases it in \emph{htmltest}. (We would expect to see a small increase in application memory usage due to system-call buffers and scratch buffers mapped into application processes.) These effects are difficult to explain due to the complexity of the applications, but could be due to changes in timing and/or effects on application or operating system memory management heuristics.
+
+Replay memory usage is similar to recording except in \emph{htmltest}, where it's dramatically lower because we're not replaying the test harness.
+
+The important point is that \system{}'s memory overhead is relatively modest and is not an issue in practice.
 
 \section{Hardware And Software Design Constraints} \label{constraints}
 
