@@ -208,8 +208,7 @@ that memory is written only by tracee threads. It is possible for recorded proce
 with other processes, and even kernel device drivers, where that non-recorded code can perform writes
 that race with accesses by tracee threads. Fortunately, this is rare for applications running in common Linux desktop environments, occurring in only four common cases: applications sharing memory with the PulseAudio daemon,
 applications sharing memory with the X server, applications sharing memory with kernel graphics drivers and GPUs, and {\tt vdso} syscalls. We avoid the first three problems by
-automatically disabling use of shared memory with PulseAudio and X (falling back to a socket transport in both cases), and disabling
-use of direct-rendering graphics drivers.
+automatically disabling use of shared memory with PulseAudio and X (falling back to a socket transport in both cases), and disabling direct access to the GPU from applications.
 
 {\tt vdso} syscalls are a Linux optimization that implements some common read-only system calls (e.g.
 {\tt gettimeofday}) entirely in user space, partly by reading memory shared with the kernel and
@@ -286,7 +285,7 @@ library, we also need to also allocate trampolines within 2GB of the patched cod
 executed system call instructions are followed by one of only five different instructions;
 for example, very many system call instructions are followed by a particular {\tt cmp} instruction testing
 the syscall result. So we added five hand-written stubs to our interception library that
-execute those post-system-call instructions before returning to the patched code, and \system{}
+execute those post-system-call instructions before returning to the patched code, and on receipt of a {\tt ptrace} system-call notification, \system{}
 replaces the system call instruction and its following instruction with a call to the corresponding stub.
 
 For simplicity we (try to) redirect all system call instructions to the interception library,
@@ -300,7 +299,7 @@ interception library needs to avoid traps for selected system calls. Fortunately
 modern Linux kernels provide a facility for selectively generating {\tt ptrace} traps: {\tt seccomp-bpf}.
 {\tt seccomp-bpf} was designed primarily for sandboxing. A process can apply a {\tt seccomp-bpf} filter function, expressed in bytecode, to another process; then, for every system call performed by the target process, the kernel runs the filter. The filter has
 access to incoming user-space register values, including the program counter. The filter result directs the kernel to either allow the system call, fail with a given {\tt errno}, kill the target process, or trigger a {\tt ptrace} trap. The overhead of filter execution is
-negligible since filters run directly in the kernel and are even JIT-compiled on most architectures.
+negligible since filters run directly in the kernel and are even compiled to native code on most architectures.
 
 \begin{figure}[t]
 \centering
@@ -332,7 +331,7 @@ The interception library opens a file descriptor for each thread to monitor thes
 kernel send a signal to the thread every time the event occurs. These signals trigger {\tt ptrace}
 notifications to \system{} while preventing the thread from executing further.
 To avoid spurious signals (e.g. when the thread is descheduled due to normal timeslice expiration), event
-counting is normally disabled and explicitly enabled during an untraced system call that might block.
+counting is normally disabled and explicitly enabled during an untraced system call that might block. It's still possible for spurious {\tt SWITCHES} to occur at any point between enabling and disabling the event; we handle these edge cases with careful inspection of the tracee state.
 
 \begin{figure}[t]
 \centering
@@ -435,7 +434,7 @@ Each test was run six times, discarding the first result and reporting the geome
 
 ``Record no-syscallbuf'' and ``Replay no-syscallbuf'' report overhead with the system-call buffering optimization disabled (which also disables block cloning). ``Record no-cloning'' reports overhead with just block cloning disabled.
 
-``DynamoRio-null'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
+``DynamoRio-null'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0, the latest stable version at time of writing) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
 
 \subsection{Observations}
 
@@ -470,8 +469,8 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 \label{dynamorio-chart}
 \end{figure}
 
-Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}
-\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}.
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. DynamoRio crashed on \emph{octane}
+\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
 
 \subsection{Storage Space Usage} \label{space-results}
 
@@ -531,7 +530,7 @@ sambatest & 298.68 & 400.49 & 428.79 & 303.03 \\
 
 Table \ref{mem-usage-table} shows the memory usage of each workload. Every 10ms we sum the ``PSS'' values of all workload processes (including \system{} if running); we determine the peak values for each run and take their geometric mean. In Linux, each page of memory mapped into a process's address space contributes $1/n$ pages to that process's PSS, where $n$ is the number of processes mapping the page; thus it is meaningful to sum PSS values over processes which share memory. The same data are shown in Figure \ref{mem-usage-chart}. In the figure, the fraction of PSS used by the \system{} process is shown in orange. Memory usage data was gathered in separate runs from the timing data shown above, to ensure the overhead of gathering memory statistics did not impact those results.
 
-Given these experiments ran on an otherwise unloaded machine with 16GB RAM and all data fits in cache, none of these workloads experienced any memory pressure. \emph{cp} baseline uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. In \emph{octane} memory usage is volatile (highly sensitive to small changes in GC behavior) but recording significantly increases application memory usage; recording also increases application memory usage a small amount in \emph{sambatest} but slightly decreases it in \emph{htmltest}. (We would expect to see a small increase in application memory usage due to system-call buffers and scratch buffers mapped into application processes.) These effects are difficult to explain due to the complexity of the applications, but could be due to changes in timing and/or effects on application or operating system memory management heuristics.
+Given these experiments ran on an otherwise unloaded machine with 16GB RAM and all data fits in cache, none of these workloads experienced any memory pressure. \emph{cp} uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. In \emph{octane} memory usage is volatile (highly sensitive to small changes in GC behavior) but recording significantly increases application memory usage; recording also increases application memory usage a small amount in \emph{sambatest} but slightly decreases it in \emph{htmltest}. (We would expect to see a small increase in application memory usage due to system-call buffers and scratch buffers mapped into application processes.) These effects are difficult to explain due to the complexity of the applications, but could be due to changes in timing and/or effects on application or operating system memory management heuristics.
 
 Replay memory usage is similar to recording except in \emph{htmltest}, where it's dramatically lower because we're not replaying the test harness.
 
@@ -648,7 +647,7 @@ Supporting recording and replay of parallel shared-memory applications with pote
 
 \section{Conclusions}
 
-The current state of Linux on commodity x86 CPUs enables single-core user-space record-and-replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented replay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. Further fundamental improvements will likely require hardware support for record-and-replay of parallel programs.
+The current state of Linux on commodity x86 CPUs enables single-core user-space record-and-replay with low overhead, without pervasive code instrumentation --- but only just. This is fortuitous; we use software and hardware features for purposes they were not designed to serve. It is also a recent development; five years ago {\tt seccomp-bpf} and the Linux file cloning APIs did not exist, and commodity architectures with a deterministic hardware performance counter usable from user-space had only just appeared (Intel Westmere)\footnote{Performance counters have been usable for kernel-implemented replay \cite{Dunlap2002,Olszewski2009} for longer, because kernel code can observe and compensate for events such as interrupts and page faults}. By identifying the utility of these features for record-and-replay, we hope that they will be supported by an increasingly broad range of future systems. By providing an open-source, easy-to-deploy, production-ready record-and-replay framework we hope to enable more compelling applications of this technology.
 
 \bibliography{Master}
 \bibliographystyle{abbrv} 
