@@ -14,7 +14,7 @@
 \maketitle
 \thispagestyle{empty}
 
-\newcommand{\system}{\textsc{Voyager}}
+\newcommand{\system}{\textsc{rr}}
 
 \begin{abstract}
 The ability to record and replay program executions with low overhead
@@ -77,8 +77,7 @@ We rely on hardware and OS features designed for other goals, so it is surprisin
 \system{} works. In fact, it skirts the edge of feasibility, and in particular
 it cannot be implemented on ARM CPUs. Section \ref{constraints} summarizes \system{}'s hardware and software requirements, which we hope will influence system designers.
 
-\system{} is in daily use by many developers as the foundation of an efficient reverse-execution debugger that works on complex applications such as Samba, Firefox, QEMU, LibreOffice and Wine. It is free software, available at
-[REDACTED]. This paper makes the following research contributions:
+\system{} is in daily use by many developers as the foundation of an efficient reverse-execution debugger that works on complex applications such as Samba, Firefox, QEMU, LibreOffice and Wine. It is free software, available at \url{https://github.com/mozilla/rr}. This paper makes the following research contributions:
 \begin{itemize}
 \item We show that record and replay of Linux user-space processes
 on modern, stock hardware and kernels and without pervasive code instrumentation is possible and practical.
@@ -470,7 +469,7 @@ Figure \ref{optimizations-chart} shows the impact of system-call buffering and b
 \end{figure}
 
 Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. DynamoRio crashed on \emph{octane}
-\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at [REDACTED].}. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
+\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at \url{https://github.com/DynamoRIO/dynamorio/issues/1930}.} \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
 
 \subsection{Storage Space Usage} \label{space-results}
 
