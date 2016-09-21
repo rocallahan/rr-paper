@@ -9,7 +9,7 @@
 \begin{document}
 
 \title{\bf Lightweight User-Space Record And Replay}
-\author{Paper \#49}
+\author{Robert O'Callahan, Chris Jones, Nathan Froyd, Kyle Huey, Albert Noll, Nimrod Partush}
 \date{}
 \maketitle
 \thispagestyle{empty}
@@ -30,8 +30,7 @@ these issues. The answer turns out to be yes --- if the CPU and
 operating system meet certain
 non-obvious constraints. Fortunately modern Intel CPUs, Linux
 kernels and user-space frameworks meet these constraints, although this has only become true recently. With
-some novel optimizations, our system \system{} [not the real name; anonymized for
-review] records and replays real-world workloads
+some novel optimizations, our system \system{} records and replays real-world workloads
 with low overhead with an entirely user-space implementation running on stock hardware
 and operating systems. \system{} forms the basis
 of an open-source reverse-execution debugger seeing significant use in practice.
