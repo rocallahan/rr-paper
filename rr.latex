@@ -8,7 +8,7 @@
 
 \begin{document}
 
-\title{\Large \bf Usable User-Space Record And Replay}
+\title{\Large \bf Building Practical Record And Replay}
 \author{
 {\rm Robert O'Callahan}\thanks{Majority of work carried out while supported by Mozilla Research.}
 \and
@@ -95,8 +95,8 @@ it cannot be implemented on ARM CPUs. Section \ref{constraints} summarizes \syst
 \begin{itemize}
 \item We show that record and replay of user-space processes
 on modern, stock hardware and software and without pervasive code instrumentation is possible and practical.
-\item We introduce the {\it in-process system-call interception} technique and show that it dramatically reduces overhead.
-\item We show that recording and replay overhead is low in practice, for applications that don't use much parallelism.
+\item We introduce an {\it in-process system-call interception} technique and show that it dramatically reduces overhead.
+\item We show that \system{} recording and replay overhead is low in practice, for applications that don't use much parallelism.
 \item We identify hardware and operating system design constraints required to support our approach.
 \end{itemize}
 
@@ -289,7 +289,7 @@ trace. The concept is simple but there are problems to overcome.
 
 \subsection{Intercepting System Calls}
 
-A common technique for intercepting system calls in-process is to use dynamic linking to interpose wrapper functions over the C library functions that make system calls. In practice, we have found that that method is insufficient (due to applications making direct system calls) and fragile (due to variations in C libraries).
+A common technique for intercepting system calls in-process is to use dynamic linking to interpose wrapper functions over the C library functions that make system calls. In practice, we have found that method to be insufficient (due to applications making direct system calls), fragile (due to variations in C libraries, and applications that require their own preloading \cite{Serebryany2012, Wine}).
 
 Instead, when the tracee makes a system call, \system{} is notified via a {\tt ptrace} trap and it tries to
 rewrite the system-call instruction to call into our interception library. This is tricky
@@ -365,7 +365,7 @@ we need to copy results from the trace buffer to system call output buffers. Thi
 because the interception library is part of the recording and replay and therefore should
 execute the same code in both cases.
 
-For this reason (and because we want to avoid races of the sort discussed in Section \ref{syscalls}),
+For this reason (and to avoid races of the sort discussed in Section \ref{syscalls}),
 the interception library redirects system call outputs so that results are written directly to the trace buffer.
 After the system call completes, the interception library copies the output data from the trace buffer to
 the original output buffer(s). During replay the untraced system call instruction is replaced with a no-op, so the system call
@@ -373,20 +373,19 @@ does not occur; the results are already present in the trace buffer so the post-
 trace buffer to the output buffer(s) does what we need.
 
 During recording, each untraced system call sets a result register and the interception library writes it to the
-trace buffer. During replay we must read the result register from the trace buffer instead. We
-accomplish this with a conditional move instruction so that control flow is perfectly consistent
+trace buffer. Replay must read the result register from the trace buffer instead. We use a conditional move instruction so that control flow is perfectly consistent
 between recording and replay. The condition is loaded from an {\tt is\_replay} global variable, so the
 register holding the condition is different over a very short span of instructions (and explicity cleared afterwards).
 
-Another tricky issue is handling system call memory parameters that are ``in-out''. During
-recording we must copy the input buffer to the trace buffer, pass the system call a
+Handling ``in-out'' system call memory parameters is tricky. During
+recording we copy the input buffer to the trace buffer, pass the system call a
 pointer to the trace buffer, then copy the trace buffer contents back to the input
-buffer. If we perform the first copy during replay, we'll overwrite the trace buffer values
-holding the system call results we need. During replay we turn that copy into a no-op using
+buffer. Performing that first copy during replay would overwrite the trace buffer values
+holding the system call results, so during replay we turn that copy into a no-op using
 a conditional move to set the source address copy to the destination address.
 
 We could allow the replay behavior of the interception library to diverge further from its
-recording behavior, but it would have to be done very carefully. At least we'd have to ensure
+recording behavior, but it would have to be done very carefully. We'd have to ensure
 the number of retired conditional branches was identical along both paths, and that register values
 were consistent whenever we exit the interception library or trap to \system{} within the
 interception library. It's simplest to minimize the divergence.
@@ -399,18 +398,9 @@ This optimization works by cloning the input blocks and then reading the input d
 
 \section{Results} \label{results}
 
-Our results address the following questions:
-\begin{itemize}
-\item What is the run-time overhead of \system{} recording and replay, across different kinds of workloads?
-\item How much of the overhead is due to the single-core limitation?
-\item What are the impacts of the system-call interception and block cloning optimizations?
-\item What is the impact of not having to instrument code?
-\item How much space do \system{} traces consume?
-\end{itemize}
-
 \subsection{Workloads}
 
-We present a variety of workloads to illuminate \system{}'s strengths and weaknesses. Benchmarks were chosen to fit in system memory (to minimize the impact of I/O on test results), and to run for about 30 seconds each (except for \emph{cp} where a 30s run time would require it to not fit in memory).
+Benchmarks were chosen to illuminate \system{}'s strengths and weaknesses, while also containing representatives of real-world usage. They were tuned to fit in system memory (to minimize the impact of I/O on test results), to run for about 30 seconds each (except for \emph{cp} where a 30s run time would require it to not fit in memory).
 
 \emph{cp} duplicates a {\tt git} checkout of {\tt glibc} (revision 2d02fd07) using {\tt cp -a} (15200 files constituting 732MB of data, according to {\tt du -h}). {\tt cp} is single-threaded, making intensive use of synchronous reads and a variety of other filesystem-related system calls.
 
@@ -441,18 +431,18 @@ sambatest & 31.75s & 1.57$\times$ & 1.23$\times$ & 0.95$\times$ & 2.23$\times$ &
   \label{run-time-overhead-table}
 \end{table*}
 
-Table \ref{run-time-overhead-table} shows the wall-clock run time of various configurations, normalized to the run time of the baseline configuration. For \emph{octane}, because the benchmark is designed to run for a fixed length of time and report a score, we report the ratio of the baseline score to the configuration-under-test score instead --- except for replay tests, where the reported score will necessarily be the same as the score during recording. For \emph{octane} replay tests, we report the ratio of the baseline score to the recorded score, multiplied by the ratio of replay run time to recording run time.
+Table \ref{run-time-overhead-table} shows the wall-clock run time of various configurations, normalized to the run time of the baseline configuration. \emph{octane} is designed to run for a fixed length of time and report a score, so we report the ratio of the baseline score to the configuration-under-test score --- except for replay tests, where the reported score will necessarily be the same as the score during recording. For \emph{octane} replay tests we report the ratio of the baseline score to the recorded score, multiplied by the ratio of replay run time to recording run time.
 Each test was run six times, discarding the first result and reporting the geometric mean of the other five results. Thus the results represent warm-cache performance.
 
 ``Single core'' reports the overhead of just restricting all threads to a single core using Linux {\tt taskset}.
 
-``Record no-intercept'' and ``Replay no-intercept'' report overhead with the system-call interception optimization disabled (which also disables block cloning). ``Record no-cloning'' reports overhead with just block cloning disabled.
+``Record no-intercept'' and ``Replay no-intercept'' report overhead with in-process system-call interception disabled (which also disables block cloning). ``Record no-cloning'' reports overhead with just block cloning disabled.
 
-``DynamoRio-null'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0, the latest stable version at time of writing) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
+``DynamoRio-null'' reports the overhead of running the tests under the DynamoRio \cite{Bruening2012} (version 6.1.0) ``null tool'', to estimate a lower bound for the overhead of using dynamic code instrumentation as an implementation technique. (DynamoRio is reported to be among the fastest dynamic code instrumentation engines.)
 
 \subsection{Observations}
 
-Overhead on \emph{make} is significantly higher than for the other workloads. Just forcing \emph{make} onto a single core imposes major slowdown. Also, \emph{make} creates many short-lived processes; it forks and execs 2430 processes. (The next most prolific workload is \emph{sambatest} with 89.) Our system-call interception optimization only starts working in a process once \system{}'s preload library has been loaded, but typically at least 80 system calls are performed before that completes, so the effectiveness of system-call interception is limited with short-lived processes.
+Overhead on \emph{make} is significantly higher than for the other workloads. Forcing \emph{make} onto a single core imposes major slowdown. Also, \emph{make} forks and execs 2430 processes, mostly short-lived. (The next most prolific workload is \emph{sambatest} with 89.) In-process system-call interception only starts working in a process once the interception library has been loaded, but at least 80 system calls are performed before that completes, so its effectiveness is limited for short-lived processes.
 
 \begin{figure}[t]
 \includegraphics[scale=0.4]{RecordReplay}
@@ -483,19 +473,14 @@ Figure \ref{optimizations-chart} shows the impact of system-call interception an
 \label{dynamorio-chart}
 \end{figure}
 
-Figure \ref{dynamorio-chart} compares \system{} recording overhead with the overhead of DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. DynamoRio crashed on \emph{octane}
-\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at \url{https://github.com/DynamoRIO/dynamorio/issues/1930}.} \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
+Figure \ref{dynamorio-chart} compares \system{} recording overhead with DynamoRio's ``null tool'', which runs all code through the DynamoRio instrumentation engine but does not modify the code beyond whatever is necessary to maintain supervised execution; this represents a minimal-overhead code instrumentation configuration. DynamoRio crashed on \emph{octane}
+\footnote{We reported DynamoRio's crash on our ``octane'' workload to the developers at \url{https://github.com/DynamoRIO/dynamorio/issues/1930}.}. \emph{cp} executes very little user-space code and DynamoRio's overhead is low on that workload. On \emph{make} and \emph{sambatest} DynamoRio overhead is similar to \system{} recording, even though on \emph{make} DynamoRio can utilize multiple cores. On \emph{htmltest} DynamoRio's overhead is very high, possibly because that test runs a lot of Javascript with dynamically generated and modified machine code. Implementing record-and-replay on top of dynamic instrumentation would incur significant additional overhead, so we would expect the resulting system to have significantly higher overhead than \system{}.
 
 \subsection{Storage Space Usage} \label{space-results}
 
-\system{} traces contain three kinds of data:
-\begin{itemize}
-\item Cloned (or hard-linked) files used for memory-map operations
-\item Cloned file blocks
-\item All other trace data, especially event metadata and the results of general system calls
-\end{itemize}
+\system{} traces contain three kinds of data: cloned (or hard-linked) files used for memory-map operations, cloned file blocks, and all other trace data, especially event metadata and the results of general system calls.
 
-Memory-mapped files are almost entirely just the executables and libraries loaded by tracees. As long as the original files don't change and are not removed, which is usually true in practice, their clones take up no additional space and require no data writes. For simplicity, \system{} makes no attempt to eliminate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice.
+Memory-mapped files are mostly the executables and libraries loaded by tracees. While the original files are not changed or removed, which is usually true in practice, their clones take no additional space and require no data writes. \system{} makes no attempt to consolidate duplicate file clones, so most traces contain many duplicates and reporting meaningful space usage for these files is both difficult and unimportant in practice. The same is true for cloned file blocks.
 
 \begin{table}[t]
   \centering
@@ -512,11 +497,9 @@ sambatest & 6.85 & 21.87$\times$ & 0.00 \\
   \label{space-usage-table}
 \end{table}
 
-Table \ref{space-usage-table} shows the space usage of each workload, in megabytes per second, for the general trace data and the cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the baseline configuration of the workload. The space consumed by each trace shows very little variation between runs.
+Table \ref{space-usage-table} shows the storage usage of each workload, in MB/s, for general trace data and cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the workload baseline configuration. Space consumption shows very little variation between runs.
 
-Like cloned files, cloned file blocks do not consume space as long as the underlying data they're cloned from persists.
-
-The different workloads have highly varying space consumption rates, but several megabytes per second is easy for modern systems to handle. Compression ratios vary depending on the kind of data being handled by the workload. In any case, in real-world usage trace storage has not been a concern.
+Different workloads have highly varying space consumption rates, but several MB/s is easy for modern systems to handle. Compression ratios vary depending on workload. In real-world usage trace storage has not been a concern.
 
 \subsection{Memory Usage}
 
@@ -544,15 +527,15 @@ sambatest & 298.68 & 400.49 & 428.79 & 303.03 \\
 
 Table \ref{mem-usage-table} shows the memory usage of each workload. Every 10ms we sum the proportional-set-size (``PSS'') values of all workload processes (including \system{} if running); we determine the peak values for each run and take their geometric mean. In Linux, each page of memory mapped into a process's address space contributes $1/n$ pages to that process's PSS, where $n$ is the number of processes mapping the page; thus it is meaningful to sum PSS values over processes which share memory. The same data are shown in Figure \ref{mem-usage-chart}. In the figure, the fraction of PSS used by the \system{} process is shown in orange. Memory usage data was gathered in separate runs from the timing data shown above, to ensure the overhead of gathering memory statistics did not impact those results.
 
-Given these experiments ran on an otherwise unloaded machine with 16GB RAM and all data fits in cache, none of these workloads experienced any memory pressure. \emph{cp} uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. In \emph{octane} memory usage is volatile (highly sensitive to small changes in GC behavior) but recording significantly increases application memory usage; recording also increases application memory usage a small amount in \emph{sambatest} but slightly decreases it in \emph{htmltest}. (We would expect to see a small increase in application memory usage due to system-call interception and scratch buffers mapped into application processes.) These effects are difficult to explain due to the complexity of the applications, but could be due to changes in timing and/or effects on application or operating system memory management heuristics.
+Given these experiments ran on an otherwise unloaded machine with 16GB RAM and all data fits in cache, none of these workloads experienced any memory pressure. \emph{cp} uses almost no memory. In \emph{make}, just running on a single core reduces peak PSS significantly because not as many processes run simultaneously. In \emph{octane} memory usage is volatile (highly sensitive to small changes in GC behavior) but recording significantly increases application memory usage; recording also increases application memory usage a small amount in \emph{sambatest} but slightly decreases it in \emph{htmltest}. (We expect a small increase in application memory usage due to system-call interception and scratch buffers.) These effects are difficult to explain due to the complexity of the applications, but could be due to changes in timing and/or effects on application or operating system memory management heuristics.
 
 Replay memory usage is similar to recording except in \emph{htmltest}, where it's dramatically lower because we're not replaying the test harness.
 
-The important point is that \system{}'s memory overhead is relatively modest and is not an issue in practice.
+\system{}'s memory overhead is not an issue in practice.
 
-\section{Hardware and Software Design Constraints} \label{constraints}
+\section{Hardware/Software Design Constraints} \label{constraints}
 
-This section summarizes the hardware and software features \system{} depends on.
+We summarize the hardware and software features \system{} depends on, for system designers who may be interested in supporting \system{}-like record-and-replay.
 
 \subsection{Hardware}
 
@@ -560,8 +543,8 @@ As discussed in Section \ref{counters}, \system{} requires a ``determinstic'' ha
 counter to measure application progress. The ideal performance counter for
 our purposes would count the exact number of instructions retired as observed in user-space
 (e.g., counting an instruction interrupted by a page fault just once).
-It's important for virtual machines to support reliable performance-counter virtualization.
-Currently KVM and VMware work with \system{}, but the VMware
+Virtual machines should support reliable performance-counter virtualization.
+Currently \system{} works under KVM and VMware, but VMware's
 \emph{VM exit clustering} optimization \cite{Agesen2012},
 as implemented, breaks the determinism of the retired-conditional-branch
 counter and must be manually disabled.
@@ -586,28 +569,19 @@ patching them is not feasible except via pervasive code instrumentation or compi
 On x86(-64), atomic operations (e.g.\ compare-and-swap) are deterministic in terms of
 user-space state, so there is no such problem.
 
-\subsection{Use Of Shared Memory}
+\subsection{Software}
 
-As noted in Section \ref{shmem}, \system{} does not support applications using
-shared memory written to by non-recorded processes or kernel code --- unless there's some defined protocol for preventing read-after-write races that \system{} can observe, for example as is the case for Video4Linux.
-Fortunately, popular desktop Linux frameworks (X11, PulseAudio) can be automatically configured per-client to minimize usage of shared memory to a few easily-handled edge cases.
+As noted in Section \ref{shmem}, \system{} depends on configuring applications to not rely on sharing memory with other non-recorded processes.
 
-\subsection{Operating System Features}
+We have described how \system{} performance depends on leveraging relatively modern Linux features: the {\tt seccomp-bpf} API to selectively trapping system calls, the {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES} performance event for handling blocking system calls, and copy-on-write file and block cloning APIs to reduce I/O overhead.
 
-\system{} performance depends on leveraging relatively modern Linux features.
-The {\tt seccomp-bpf} API, or something like it, is essential to selectively trapping system calls.
-The Linux {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES} performance event is essential for handling blocking system calls.
-The Linux copy-on-write file and block cloning APIs reduce overhead for I/O intensive applications.
-
-\subsection{Operating System Design}
-
-Any efficient record-and-replay system depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This works well with Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple, and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for an operating system like Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
+Efficient record-and-replay depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This suits Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for an operating system like Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
 
 \section{Related Work}
 
 \subsection{Whole-System Replay}
 
-ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMware \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMware Workstation, for a time, but discontinued the feature. The full-system simulator Simics has long supported reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been multiple independent efforts to add some amount of record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011}. Whole-system record-and-replay can be useful, but for many users it is inconvenient to have to hoist the application into a virtual machine. Many applications of record-and-replay also require cheap checkpointing, and checkpointing an entire system is generally more expensive than checkpointing one or a few processes.
+ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMware \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMware Workstation, for a time, but discontinued the feature. The full-system simulator Simics has long supported reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been multiple independent efforts to add some amount of record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011}. Whole-system record-and-replay can be useful, but it is often inconvenient to hoist the application into a virtual machine. Many applications of record-and-replay require cheap checkpointing, and checkpointing a VM image is generally more expensive than checkpointing one or a few processes.
 
 \subsection{Replaying User-Space With Kernel Support}
 
@@ -615,11 +589,11 @@ Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} 
 
 \subsection{Pure User-Space Replay}
 
-Approaches based on user-space interception of system calls have existed since at least MEC \cite{Chastain1999}, and later Jockey \cite{Saito2005} and liblog \cite{Geel2006}. Those systems did not handle asynchronous event timing. Also, techniques relying on library injection, such as liblog and Jockey, do not handle complex scenarios such as ASAN \cite{Serebryany2012} or Wine \cite{Wine} with their own preloading requirements. PinPlay \cite{Patil2010}, iDNA \cite{Bhansali2006}, UndoDB \cite{UndoDB} and TotalView ReplayEngine \cite{Gottbrath2008} use code instrumentation to record and replay asynchronous event timing. Unlike UndoDB and \system{}, PinPlay and iDNA instrument all loads, thus supporting parallel recording in the presence of data races and avoiding having to compute the effects of system calls, but this gives them higher overhead than the other systems.
+Approaches based on user-space interception of system calls have existed since at least MEC \cite{Chastain1999}, and later Jockey \cite{Saito2005} and liblog \cite{Geel2006}. Those systems did not handle asynchronous event timing. PinPlay \cite{Patil2010}, iDNA \cite{Bhansali2006}, UndoDB \cite{UndoDB} and TotalView ReplayEngine \cite{Gottbrath2008} use code instrumentation to record and replay asynchronous event timing. Unlike UndoDB and \system{}, PinPlay and iDNA instrument all loads, thus supporting parallel recording in the presence of data races and avoiding having to compute the effects of system calls, but this gives them higher overhead than the other systems.
 
 As far as we know \system{} is the only pure user-space record-and-replay system to date that eschews code instrumentation in favour of hardware performance counters for asynchronous event timing, and it has the lowest overhead of the pure user-space systems.
 
-\subsection{Higher-Level Replay}
+\subsection{Higher-Level Replay} 
 
 Record-and-replay features have been integrated into language-level virtual machines. DejaVu \cite{Choi2001} added record-and-replay capabilities to the Jalape\~{n}o Java VM. Microsoft IntelliTrace \cite{Microsoft2013} instruments CLR bytecode to record high-level events and the parameters and results of function calls; it does not produce a full replay. Systems such as Chronon \cite{Deva2010} for Java instrument bytecode to collect enough data to provide the appearance of replaying execution for debugging purposes, without actually doing a replay. Dolos \cite{Burg2013} provides record-and-replay for JS applications in Webkit by recording and replaying the nondeterministic inputs to the browser. R2 \cite{Guo2008} provides record-and-replay by instrumenting library interfaces with assistance from the application developer. Such systems are all significantly narrower in scope than the ability to replay general user-space execution. 
 
@@ -637,9 +611,7 @@ Putting record-and-replay support in the kernel has performance benefits, e.g.\ 
 
 Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008}, dthreads \cite{Liu2011} or Castor \cite{Mashtizadeh2017} may work for some workloads.
 
-The applications of record-and-replay are perhaps more interesting and important than the base technology. For example, one can perform high-overhead dynamic analysis during replay \cite{Devecsery2014, Dolan-Gavitt2015, Patil2010}, potentially parallelized over multiple segments of the execution. With \system{}'s no-instrumentation approach, one could collect performance data such as sampled stacks and performance counter values during recording, and correlate that data with rich analysis generated during replay (e.g.\ cache simulation). Always-on record-and-replay would make finding and fixing bugs in the field much easier.
-
-Supporting recording and replay of parallel shared-memory applications with potential races, while keeping overhead low, will be very difficult without hardware support. Demonstrating compelling applications for record-and-replay will build the case for including such support in commodity hardware.
+The applications of record-and-replay are perhaps more interesting and important than the base technology. For example, one can perform high-overhead dynamic analysis during replay \cite{Devecsery2014, Dolan-Gavitt2015, Patil2010}, potentially parallelized over multiple segments of the execution. With \system{}'s no-instrumentation approach, one could collect performance data such as sampled stacks and performance counter values during recording, and correlate that data with rich analysis generated during replay (e.g.\ cache simulation). Always-on record-and-replay would make finding and fixing bugs in the field much easier. Demonstrating compelling applications for record-and-replay will build the case for building support into commodity hardware and software.
 
 \section{Conclusions}
 
