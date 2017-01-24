@@ -552,47 +552,27 @@ The important point is that \system{}'s memory overhead is relatively modest and
 
 \section{Hardware and Software Design Constraints} \label{constraints}
 
-\subsection{Peformance Counters}
+This section summarizes the hardware and software features \system{} depends on.
 
-As discussed in Section \ref{counters}, \system{} uses hardware performance
-counters to measure application progress. We need a counter that
-increments very frequently so that the pair (counter, general purpose registers)
-uniquely identifies a program execution point in practice, and it must be ``deterministic'' as described earlier.
-Performance counters are typically used for statistical analysis, which does not
-need this determinism property, so unsurprisingly it does not hold
-for most performance counter implementations \cite{Weaver2013}. We are indeed fortunate that there is one satisfactory counter in Intel's modern Core models. The ideal performance counter for
+\subsection{Hardware}
+
+As discussed in Section \ref{counters}, \system{} requires a ``determinstic'' hardware performance
+counter to measure application progress. The ideal performance counter for
 our purposes would count the exact number of instructions retired as observed in user-space
-(e.g., counting an instruction interrupted by a page fault just once); then the counter value
-alone would always uniquely identify an execution point.
-
-Being able to run \system{} in virtual machines is helpful for deployability.
-KVM, VMware and Xen support virtualization of performance counters, and \system{}
-is known to work in KVM and VMware (Xen not tested). Interestingly the VMware
+(e.g., counting an instruction interrupted by a page fault just once).
+It's important for virtual machines to support reliable performance-counter virtualization.
+Currently KVM and VMware work with \system{}, but the VMware
 \emph{VM exit clustering} optimization \cite{Agesen2012},
 as implemented, breaks the determinism of the retired-conditional-branch
-counter and must be manually disabled. Given a pair of close-together {\tt CPUID} instructions
-separated by a conditional branch, the clustering optimization translates the code to
-an instruction sequence that runs entirely in the host, reducing the number of VM exits from two (one per {\tt CPUID}) to one,
-but performance counter effects are not emulated so the conditional branch is not counted.
-In some runs of the instruction sequence the clustering optimization does not take effect
-(perhaps because of a page fault?), so the count of retired conditional branches varies.
+counter and must be manually disabled.
 
-\subsection{Nondeterminisic Instructions}
-
-Most CPU instructions are deterministic. As discussed in Section \ref{instructions},
-the nondeterministic x86(-64) instructions can currently be handled or
-(in practice) ignored, but this could change, so we need some improvements in this area.
-
-Extending Linux (and hardware, where necessary) to support trapping on executions of
-{\tt CPUID}, as we can for {\tt RDTSC}, would let us mask off capability bits so that
-well-behaved software does not use the newer non-deterministic instructions.
-Trapping and emulating {\tt CPUID} is also necessary to support trace portability
-across machines with different CPU models and would let us avoid
-pinning recording and replay to a specific core.
+Some x86 CPU instructions are nondeterministic. Section \ref{instructions} discusses our
+current workarounds for this. Exposing hardware support for trapping {\tt CPUID} is
+important for long-term control over these instructions.
 
 We would like to support record-and-replay of programs using hardware transactional
-memory ({\tt XBEGIN}/{\tt XEND}). This could be done efficiently if the hardware
-and OS could be configured to raise a signal on any failed transaction.
+memory ({\tt XBEGIN}/{\tt XEND}). It would suffice if hardware
+and the OS could be configured to raise a signal on any failed transaction.
 
 Trapping on all other nondetermnistic instructions (e.g.\ {\tt RDRAND}) would
 be useful.
@@ -602,7 +582,7 @@ use the ``load-linked/store-conditional'' approach, which is inherently nondeter
 The conditional store can fail because of non-user-space-observable activity, e.g.\ hardware interrupts, so counts of retired instructions or conditional branches for
 code performing atomic memory operations are nondeterminstic. These
 operations are inlined into very many code locations, so it appears
-patching them is not feasible except via pervasive code instrumentation.
+patching them is not feasible except via pervasive code instrumentation or compiler changes.
 On x86(-64), atomic operations (e.g.\ compare-and-swap) are deterministic in terms of
 user-space state, so there is no such problem.
 
