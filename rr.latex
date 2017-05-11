@@ -8,7 +8,7 @@
 
 \begin{document}
 
-\title{\Large \bf Building Practical Record And Replay}
+\title{\Large \bf Engineering Record And Replay For Deployability}
 \author{
 {\rm Robert O'Callahan}\thanks{Majority of work carried out while supported by Mozilla Research.}
 \and
@@ -36,18 +36,17 @@ The ability to record and replay program executions with low overhead
 enables many applications, such as reverse-execution debugging,
 debugging of hard-to-reproduce test failures, and ``black box''
 forensic analysis of failures in deployed systems. Existing
-record-and-replay approaches rely on recording an entire virtual machine
-(which is heavyweight), modifying the OS kernel (which adds deployment and maintenance costs),
-pervasive code instrumentation (which
-imposes significant performance and complexity overhead), or modifying
+record-and-replay approaches limit deployability by recording an entire virtual machine
+(heavyweight), modifying the OS kernel (adding deployment and maintenance costs),
+requiring pervasive code instrumentation (imposing significant performance and complexity overhead), or modifying
 compilers and runtime systems (limiting generality). We investigated
 whether it is possible to build a practical record-and-replay system avoiding all
 these issues. The answer turns out to be yes --- if the CPU and
 operating system meet certain
 non-obvious constraints. Fortunately modern Intel CPUs, Linux
-kernels and user-space frameworks meet these constraints, although this has only become true recently. With
-some novel optimizations, our system \system{} records and replays real-world workloads
-with low overhead, with an entirely user-space implementation, using stock hardware, 
+kernels and user-space frameworks do meet these constraints, although this has only become true recently. With
+some novel optimizations, our system \system{} records and replays real-world low-parallelism
+workloads with low overhead, with an entirely user-space implementation, using stock hardware, 
 compilers, runtimes and operating systems. \system{} forms the basis
 of an open-source reverse-execution debugger seeing significant use in practice.
 We present the design and implementation of \system{}, describe its performance on a
@@ -68,7 +67,7 @@ pervasive instrumentation of code, which adds complexity and overhead, especiall
 
 We set out to build a system that maximizes deployability by avoiding all these issues: to record and replay
 unmodified user-space applications with stock Linux kernels, compilers, language runtimes, and x86/x86-64 CPUs, with a fully user-space implementation running without special
-privileges, and without using pervasive code instrumentation. We assume that \system{} should run unmodified applications, and they will have bugs (including data races) that we wish to faithfully record
+privileges, and without using pervasive code instrumentation. We assume \system{} should run unmodified applications, and they will have bugs (including data races) that we wish to faithfully record
 and replay, but these applications will not maliciously try to subvert recording or replay.
 We combine techniques already known, but not previously demonstrated working together in a practical
 system: primarily, using {\tt ptrace} to record and replay system call results and signals,
@@ -77,9 +76,9 @@ and using CPU hardware performance counters to measure application progress so a
 and context-switch events are delivered at the right moment \cite{Olszewski2009}.
 Section \ref{design} describes our approach in more detail.
 
-With the basic functionality in place, we discovered that the main performance bottleneck for
-low-parallelism applications was the
-context switching required by using {\tt ptrace} to monitor system calls. We implemented
+With that in place, we discovered the main performance bottleneck for
+low-parallelism workloads was
+context switching induced by using {\tt ptrace} to monitor system calls. We implemented
 a novel {\it in-process system-call interception} technique to eliminate those context switches, dramatically
 reducing recording and replay overhead on important real-world workloads. This optimization relies on modern Linux kernel
 features: {\tt seccomp-bpf} to selectively suppress {\tt ptrace} traps for certain system
@@ -94,9 +93,9 @@ it cannot be implemented on ARM CPUs. Section \ref{constraints} summarizes \syst
 \system{} is in daily use by many developers as the foundation of an efficient reverse-execution debugger that works on complex applications such as Samba, Firefox, Chromium, QEMU, LibreOffice and Wine. It is free software, available at \url{https://github.com/mozilla/rr}. This paper makes the following research contributions:
 \begin{itemize}
 \item We show that record and replay of user-space processes
-on modern, stock hardware and software and without pervasive code instrumentation is possible and practical.
-\item We introduce an {\it in-process system-call interception} technique and show that it dramatically reduces overhead.
-\item We show that \system{} recording and replay overhead is low in practice, for applications that don't use much parallelism.
+on modern, stock hardware and software without pervasive code instrumentation is possible and practical.
+\item We introduce an {\it in-process system-call interception} technique and show it dramatically reduces overhead.
+\item We show that for low-parallelism workloads, \system{} recording and replay overhead is reasonably low, lower than other approaches with comparable deployability.
 \item We identify hardware and operating system design constraints required to support our approach.
 \end{itemize}
 
@@ -133,15 +132,18 @@ asynchronous events.
 
 With threads running on multiple cores, racing read-write or write-write accesses to
 the same memory location by different threads would be a source of
-nondeterminism. It seems impractical to record such nondeterminism with
-low overhead on stock hardware and software, so we avoid such races by allowing only one recorded
-thread to run at a time. \system{} preemptively schedules these threads, so context switches
-are a source of nondeterminism that must be recorded. Data race bugs can still be observed if a context
+nondeterminism. Therefore we take the common approach \cite{Dunlap2002, Malyugin2007, UndoDB, Dolan-Gavitt2015} running only one
+thread at a time. \system{} preemptively schedules these threads, so context switch timing is
+ nondeterminism that must be recorded. Data race bugs can still be observed if a context
 switch occurs at the right point in the execution (though bugs due to weak memory models cannot be
 observed).
 
-This approach is simple and efficient for applications without much parallelism. It imposes
-significant slowdown for applications with a consistently high degree of parallelism, but those are still relatively uncommon.
+This approach is much simpler and more deployable than alternatives \cite{Bhansali2006, Dunlap2008, Patil2010, Veeraraghavan2011,
+Mashtizadeh2017}, avoids assuming programs are race-free \cite{Devecsery2014, Mashtizadeh2017}, and is efficient for low-parallelism workloads. 
+There is a large slowdown for workloads with a consistently high degree of
+parallelism; however, even for applications which are potentially highly parallel,
+users often apply \system{} to test workloads with relatively small
+datasets and hence limited parallelism.
 
 \subsection{System Calls} \label{syscalls}
 
@@ -168,7 +170,7 @@ contents to the real user-space destination(s) while no other threads are runnin
 \label{simple-syscall}
 \end{figure}
 
-Figure \ref{simple-syscall} illustrates the flow of control recording a simple {\tt read} system call. The gray box represents kernel code.
+Figure \ref{simple-syscall} illustrates recording a simple {\tt read} system call. The gray box represents kernel code.
 
 During replay, when the next event to be replayed is an intercepted system call, we
 set a temporary breakpoint at the address of the system call instruction (recorded in the trace). We use
@@ -176,35 +178,43 @@ set a temporary breakpoint at the address of the system call instruction (record
 the breakpoint, remove the breakpoint, advance the program counter past the system call instruction,
 and apply the recorded register and memory changes. This approach is simple and minimizes the number
 of context switches between \system{} and the tracee thread. (Occasionally it is unsafe and we fall back
-to a more complicated mechanism.)
+to a more complicated mechanism.) % XXXExtend
+
+Some system calls manipulate threads or address
+spaces and require special handling during replay. For example a recorded {\tt mmap} is replayed
+with {\tt MAP\_FIXED} to ensure the mapping is created at the correct address.
 
 \subsection{Asynchronous Events}
 
 We need to support two kinds of asynchronous events: preemptive context switches and signals.
-The former is handled as a special case of the latter; we force a context switch by sending a signal
-to a running tracee thread. In general we need to ensure that during replay, a signal is delivered when the
+We treat the former as a special case of the latter, forcing a context switch by sending a signal
+to a running tracee thread. We need to ensure that during replay, a signal is delivered when the
 program is in exactly the same state as it was when the signal was delivered during recording.
 
-Our approach is very similar to ReVirt's \cite{Dunlap2002}: use CPU hardware performance counters. Ideally we would count the number of
-retired instructions leading up to a signal delivery during recording, and during replay, program
-the CPU to fire an interrupt after that many instructions have been retired. However, this simple approach needs
-two modifications to work in practice.
+As in previous work \cite{Dunlap2002, Olszewski2009, Burtsev2016} we measure application progress using CPU hardware performance counters. Ideally we would count
+retired instructions leading up to an asynchronous event during recording, and during replay program
+the CPU to fire an interrupt after that many instructions have been retired --- but this approach needs
+modifications to work in practice.
 
 \subsubsection{Nondeterministic Performance Counters} \label{counters}
 
-Measuring user-space progress with a hardware performance counter for record-and-replay requires that every time we execute
-a given sequence of user-space instructions, the counter value changes by an amount that depends only
-on the instruction sequence, and not any system state unobservable from user space (e.g.\ the contents of
-caches, the state of page tables, or speculative CPU state). As noted in previous work \cite{Dunlap2002,Weaver2013}, this property (commonly described as ``determinism'') does not hold for
-most CPU performance counters in practice. For example it does not hold for any ``instructions retired''
-counter on any known x86 CPU model, because (among other reasons) an instruction triggering a page fault is restarted and counted twice.
+We require that every execution of a given sequence of user-space instructions changes the counter value by an amount that depends only on the instruction sequence, not system state invisible to user space (e.g.\ the contents of
+caches, the state of page tables, or speculative CPU state). This property (commonly described as ``determinism'' \cite{Weaver2013}) does not hold for
+most CPU performance counters in practice \cite{Dunlap2002,Weaver2013}. For example it does not hold for any ``instructions retired''
+counter on any known x86 CPU model (e.g.\ because an instruction triggering a page fault is restarted and counted twice).
 
 Fortunately, modern Intel CPUs have exactly one deterministic performance counter: ``retired conditional branches'' (``RCB''), so
 we use that. We cannot just count the number of RCBs during recording and deliver the signal after we have
 executed that number of RCBs during replay, because the RCB count does not uniquely determine the execution point to
 deliver the signal at. Therefore we pair the RCB count with the complete state of general-purpose registers (including the program counter)
-to identify an execution point. In theory that \emph{still} does not uniquely identify an
-execution point: consider, for example, the infinite loop {\tt label: inc [global\_var]; jmp label;}. In practice applications do not do that sort of thing and we have found it works reliably.
+to identify an execution point.
+
+In general that \emph{still} does not uniquely identify an
+execution point (e.g.\ consider the infinite loop {\tt label: inc [global\_var]; jmp label;}).
+However, in practice we have found it works reliably; code that returns to the same instruction with no intervening
+conditional branch must be very rare, and it only matters to \system{} if an asynchronous event occurs at such an instruction --- in which case replay would probably diverge and fail.
+
+% XXXExtend
 
 \subsubsection{Late Interrupt Firing}
 
@@ -289,31 +299,31 @@ trace. The concept is simple but there are problems to overcome.
 
 \subsection{Intercepting System Calls}
 
-A common technique for intercepting system calls in-process is to use dynamic linking to interpose wrapper functions over the C library functions that make system calls. In practice, we have found that method to be insufficient (due to applications making direct system calls), fragile (due to variations in C libraries, and applications that require their own preloading \cite{Serebryany2012, Wine}).
+A common technique for intercepting system calls in-process is to use dynamic linking to interpose wrapper functions over the C library functions that make system calls. In practice, we have found that method to be insufficient, due to applications making direct system calls, and fragile, due to variations in C libraries, and applications that require their own preloading \cite{Serebryany2012, Wine}).
 
 Instead, when the tracee makes a system call, \system{} is notified via a {\tt ptrace} trap and it tries to
 rewrite the system-call instruction to call into our interception library. This is tricky
 because on x86 a system call instruction is two bytes long, but we need to replace it with a five-byte {\tt call}
-instruction. (On x86-64, to ensure we can call from anywhere in the address space to the interception
-library, we also need to also allocate trampolines within 2GB of the patched code.) In practice, the vast majority of
-executed system call instructions are followed by one of only five different instructions;
-for example, very many system call instructions are followed by a particular {\tt cmp} instruction testing
-the syscall result. So we added five hand-written stubs to our interception library that
-execute those post-system-call instructions before returning to the patched code, and on receipt of a {\tt ptrace} system-call notification, \system{}
+instruction.
+% (On x86-64, to ensure we can call from anywhere in the address space to the interception
+% library, we also need to also allocate trampolines within 2GB of the patched code.)
+In practice, frequently executed system call instructions are followed by a few known, fixed instruction sequences;
+for example, many system call instructions are followed by a {\tt cmpl \$0xfffff001,\%eax} instruction testing
+the syscall result. We added five hand-written stubs to our interception library that
+execute post-system-call instructions before returning to the patched code. On receipt of a {\tt ptrace} system-call notification, \system{}
 replaces the system call instruction and its following instruction with a call to the corresponding stub.
 
-For simplicity we (try to) redirect all system call instructions to the interception library,
-but the library only contains wrappers for the most frequently called system calls. For other system
-calls it falls back to doing a regular {\tt ptrace}-trapping system call.
+We (try to) redirect all system call instructions to the interception library,
+but for simplicity it only contains wrappers for the most common system calls, and for
+others it falls back to doing a regular {\tt ptrace}-trapping system call.
 
 \subsection{Selectively Trapping System Calls}
 
-The classic {\tt ptrace} system-call monitoring API triggers traps for all system calls, but our
+{\tt ptrace} system-call monitoring triggers traps for all system calls, but our
 interception library needs to avoid traps for selected system calls. Fortunately,
-modern Linux kernels provide a facility for selectively generating {\tt ptrace} traps: {\tt seccomp-bpf}.
-{\tt seccomp-bpf} was designed primarily for sandboxing. A process can apply a {\tt seccomp-bpf} filter function, expressed in bytecode, to another process; then, for every system call performed by the target process, the kernel runs the filter. The filter has
-access to incoming user-space register values, including the program counter. The filter result directs the kernel to either allow the system call, fail with a given {\tt errno}, kill the target process, or trigger a {\tt ptrace} trap. The overhead of filter execution is
-negligible since filters run directly in the kernel and are even compiled to native code on most architectures.
+modern Linux kernels support selectively generating {\tt ptrace} traps: {\tt seccomp-bpf}.
+{\tt seccomp-bpf} was designed primarily for sandboxing. A process can apply a {\tt seccomp-bpf} filter function, expressed in bytecode, to another process; then, for every system call performed by the target process, the kernel runs the filter, passing in incoming user-space register values, including the program counter. The filter's result directs the kernel to either allow the system call, fail with a given {\tt errno}, kill the target process, or trigger a {\tt ptrace} trap. Overhead of filter execution is
+negligible since filters run directly in the kernel and are compiled to native code on most architectures.
 
 \begin{figure}[t]
 \centering
@@ -322,7 +332,7 @@ negligible since filters run directly in the kernel and are even compiled to nat
 \label{syscallbuf-diagram}
 \end{figure}
 
-Figure \ref{syscallbuf-diagram} illustrates recording a simple {\tt read} system call with user-space system-call interception. The solid-border box represents code in the interception library and the grey box represents kernel code.
+Figure \ref{syscallbuf-diagram} illustrates recording a simple {\tt read} system call with in-process system-call interception. The solid-border box represents code in the interception library and the grey box represents kernel code.
 
 \system{} injects a special page of memory into every tracee process at a fixed address (immediately after {\tt execve}).
 That page contains a system call instruction --- the ``untraced instruction''.
@@ -337,15 +347,15 @@ Some common system calls sometimes block (e.g.\ {\tt read} on an empty pipe). Be
 tracee threads one at a time, if a thread enters a blocking system call without notifying \system{}, it
 will hang and could cause the entire recording to deadlock (e.g.\ if another tracee thread is about to
 {\tt write} to the pipe). We need the kernel to notify \system{} and suspend the tracee thread whenever
-it blocks in an untraced system call, to ensure we get a chance to schedule a different tracee thread.
+an untraced system call blocks, to ensure we can schedule a different tracee thread.
 
-We can do this using the Linux {\tt perf} event system to monitor {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES}.
-One of these events occurs every time the kernel deschedules a thread from a CPU core. 
-The interception library opens a file descriptor for each thread to monitor these events for that thread, and requests that the
-kernel send a signal to the thread every time the event occurs. These signals trigger {\tt ptrace}
+We do this using the Linux {\tt perf} event system to monitor {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES}.
+The kernel raises one of these events every time it deschedules a thread from a CPU core. 
+The interception library monitors these events for each thread and requests that the
+kernel send a signal to the blocked thread every time the event occurs. These signals trigger {\tt ptrace}
 notifications to \system{} while preventing the thread from executing further.
-To avoid spurious signals (e.g.\ when the thread is descheduled due to normal timeslice expiration), event
-counting is normally disabled and explicitly enabled during an untraced system call that might block. It is still possible for spurious {\tt SWITCHES} to occur at any point between enabling and disabling the event; we handle these edge cases with careful inspection of the tracee state.
+To avoid spurious signals (e.g.\ when the thread is descheduled due to normal timeslice expiration), the event
+is normally disabled and explicitly enabled during an untraced system call that might block. Still, spurious {\tt SWITCHES} can occur at any point between enabling and disabling the event; we handle these edge cases with careful inspection of the tracee state.
 
 \begin{figure}[t]
 \centering
@@ -356,17 +366,17 @@ counting is normally disabled and explicitly enabled during an untraced system c
 
 Figure \ref{syscallbuf-blocked-diagram} illustrates recording a blocking {\tt read} system call with system-call interception. The kernel deschedules the thread, triggering a {\tt perf} event which sends a signal to the thread, \emph{rescheduling} it, interrupting the system call, and sending a {\tt ptrace} notification to the recorder. The recorder does bookkeeping to note that an intercepted system call was interrupted in thread {\it T}, then checks whether any tracee threads in blocking system calls have progressed to a system-call exit and generated a {\tt ptrace} notification. In this example {\it T2} has completed a (not intercepted) blocking {\tt futex} system call, so we resume executing {\it T2}.
 
-Resuming an intercepted system call that was interrupted by a signal (e.g.\ {\it T}'s {\tt read} call in Figure \ref{syscallbuf-blocked-diagram}) is more complicated and requires understanding Linux system call restart semantics, which are too nasty to cover in this paper.
+Resuming an intercepted system call that was interrupted by a signal (e.g.\ {\it T}'s {\tt read} call in Figure \ref{syscallbuf-blocked-diagram}) is more complicated. Explaining that requires understanding Linux system call restart semantics, which are too complicated to explain in the space available here.
 
 \subsection{Handling Replay}
 
 Conceptually, during recording we need to copy system call output buffers to a trace buffer, and during replay
 we need to copy results from the trace buffer to system call output buffers. This is a problem
 because the interception library is part of the recording and replay and therefore should
-execute the same code in both cases.
+execute the same code in both cases. (Previous work with user-level system call interception \cite{Chastain1999, Saito2005, Geel2006, Mashtizadeh2017} avoided these problems by having less strict goals for replay fidelity.)
 
 For this reason (and to avoid races of the sort discussed in Section \ref{syscalls}),
-the interception library redirects system call outputs so that results are written directly to the trace buffer.
+the interception library redirects system call outputs to write directly to the trace buffer.
 After the system call completes, the interception library copies the output data from the trace buffer to
 the original output buffer(s). During replay the untraced system call instruction is replaced with a no-op, so the system call
 does not occur; the results are already present in the trace buffer so the post-system-call copy from the
@@ -384,9 +394,9 @@ buffer. Performing that first copy during replay would overwrite the trace buffe
 holding the system call results, so during replay we turn that copy into a no-op using
 a conditional move to set the source address copy to the destination address.
 
-We could allow the replay behavior of the interception library to diverge further from its
-recording behavior, but it would have to be done very carefully. We'd have to ensure
-the number of retired conditional branches was identical along both paths, and that register values
+We could allow replay of the interception library to diverge further from its
+recorded behavior, but that would have to be done very carefully. We'd have to ensure
+the RCB count was identical along both paths, and that register values
 were consistent whenever we exit the interception library or trap to \system{} within the
 interception library. It's simplest to minimize the divergence.
 
@@ -499,7 +509,7 @@ sambatest & 6.85 & 21.87$\times$ & 0.00 \\
 
 Table \ref{space-usage-table} shows the storage usage of each workload, in MB/s, for general trace data and cloned file blocks. We compute the geometric mean of the data usage for each trace and divide by the run-time of the workload baseline configuration. Space consumption shows very little variation between runs.
 
-Different workloads have highly varying space consumption rates, but several MB/s is easy for modern systems to handle. Compression ratios vary depending on workload. In real-world usage trace storage has not been a concern.
+Different workloads have highly varying space consumption rates, but several MB/s is easy for modern systems to handle. In real-world usage, trace storage has not been a concern.
 
 \subsection{Memory Usage}
 
@@ -542,11 +552,11 @@ We summarize the hardware and software features \system{} depends on, for system
 As discussed in Section \ref{counters}, \system{} requires a ``determinstic'' hardware performance
 counter to measure application progress. The ideal performance counter for
 our purposes would count the exact number of instructions retired as observed in user-space
-(e.g., counting an instruction interrupted by a page fault just once).
+(e.g., counting an interrupted-and-restarted instruction once).
 Virtual machines should support reliable performance-counter virtualization.
 Currently \system{} works under KVM and VMware, but VMware's
 \emph{VM exit clustering} optimization \cite{Agesen2012},
-as implemented, breaks the determinism of the retired-conditional-branch
+as implemented, breaks the determinism of the RCB
 counter and must be manually disabled.
 
 Some x86 CPU instructions are nondeterministic. Section \ref{instructions} discusses our
@@ -571,35 +581,33 @@ user-space state, so there is no such problem.
 
 \subsection{Software}
 
-As noted in Section \ref{shmem}, \system{} depends on configuring applications to not rely on sharing memory with other non-recorded processes.
+As noted in Section \ref{shmem}, \system{} depends on configuring applications to avoid sharing memory with non-recorded processes.
 
-We have described how \system{} performance depends on leveraging relatively modern Linux features: the {\tt seccomp-bpf} API to selectively trapping system calls, the {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES} performance event for handling blocking system calls, and copy-on-write file and block cloning APIs to reduce I/O overhead.
+We described how \system{} performance depends on modern Linux features: {\tt seccomp-bpf} to selectively trap system calls, {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES} performance events to handling blocking system calls, and copy-on-write file and block cloning APIs to reduce I/O overhead.
 
-Efficient record-and-replay depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This suits Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for an operating system like Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
+Efficient record-and-replay depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This suits Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
 
 \section{Related Work}
 
 \subsection{Whole-System Replay}
 
-ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMware \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMware Workstation, for a time, but discontinued the feature. The full-system simulator Simics has long supported reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been multiple independent efforts to add some amount of record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011}. Whole-system record-and-replay can be useful, but it is often inconvenient to hoist the application into a virtual machine. Many applications of record-and-replay require cheap checkpointing, and checkpointing a VM image is generally more expensive than checkpointing one or a few processes.
+ReVirt \cite{Dunlap2002} was an early project that recorded and replayed the execution of an entire virtual machine. VMware \cite{Malyugin2007} used the same approach to support record-and-replay debugging in VMware Workstation, for a time, but discontinued the feature. The full-system simulator Simics supports reverse-execution debugging via deterministic reexecution \cite{Engblom2010}. There have been efforts to add some record-and-replay support to QEMU \cite{Dolan-Gavitt2015,Dovgalyuk2012,Srinivasan2011} and Xen \cite{Dunlap2008, Burtsev2016}. Whole-system record-and-replay can be useful, but it is often inconvenient to hoist the application into a virtual machine. Many applications of record-and-replay require cheap checkpointing, and checkpointing a VM image is generally more expensive than checkpointing one or a few processes.
 
 \subsection{Replaying User-Space With Kernel Support}
 
-Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Requiring kernel changes makes maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if record-and-replay can be well implemented outside the kernel, moving it into the kernel may not be desirable.
+Scribe \cite{Laadan2010}, dOS \cite{Bergan2010} and Arnold \cite{Devecsery2014} replay a process or group of processes by extending the OS kernel with record-and-replay functionality. Kernel changes make maintenance and deployment more difficult --- unless record-and-replay is integrated into the base OS. But adding invasive new features to the kernel has risks, so if record-and-replay can be well implemented outside the kernel, moving it into the kernel may not be desirable.
 
 \subsection{Pure User-Space Replay}
 
-Approaches based on user-space interception of system calls have existed since at least MEC \cite{Chastain1999}, and later Jockey \cite{Saito2005} and liblog \cite{Geel2006}. Those systems did not handle asynchronous event timing. PinPlay \cite{Patil2010}, iDNA \cite{Bhansali2006}, UndoDB \cite{UndoDB} and TotalView ReplayEngine \cite{Gottbrath2008} use code instrumentation to record and replay asynchronous event timing. Unlike UndoDB and \system{}, PinPlay and iDNA instrument all loads, thus supporting parallel recording in the presence of data races and avoiding having to compute the effects of system calls, but this gives them higher overhead than the other systems.
-
-As far as we know \system{} is the only pure user-space record-and-replay system to date that eschews code instrumentation in favour of hardware performance counters for asynchronous event timing, and it has the lowest overhead of the pure user-space systems.
+Pure user-space record-and-replay systems have existed since at least MEC \cite{Chastain1999}, and later Jockey \cite{Saito2005} and liblog \cite{Geel2006}. Those systems did not handle asynchronous event timing and other OS features. PinPlay \cite{Patil2010}, iDNA \cite{Bhansali2006}, UndoDB \cite{UndoDB} and TotalView ReplayEngine \cite{Gottbrath2008} use code instrumentation to record and replay asynchronous event timing. Unlike UndoDB and \system{}, PinPlay and iDNA instrument all loads, thus supporting parallel recording in the presence of data races and avoiding having to compute the effects of system calls, but this gives them higher overhead than the other systems. Compared to the other systems that support asynchronous events, \system{} achieves lower overhead by avoiding code instrumentation.
 
 \subsection{Higher-Level Replay} 
 
-Record-and-replay features have been integrated into language-level virtual machines. DejaVu \cite{Choi2001} added record-and-replay capabilities to the Jalape\~{n}o Java VM. Microsoft IntelliTrace \cite{Microsoft2013} instruments CLR bytecode to record high-level events and the parameters and results of function calls; it does not produce a full replay. Systems such as Chronon \cite{Deva2010} for Java instrument bytecode to collect enough data to provide the appearance of replaying execution for debugging purposes, without actually doing a replay. Dolos \cite{Burg2013} provides record-and-replay for JS applications in Webkit by recording and replaying the nondeterministic inputs to the browser. R2 \cite{Guo2008} provides record-and-replay by instrumenting library interfaces with assistance from the application developer. Such systems are all significantly narrower in scope than the ability to replay general user-space execution. 
+Record-and-replay features have been integrated into language-level virtual machines. DejaVu \cite{Choi2001} added record-and-replay capabilities to the Jalape\~{n}o Java VM. Microsoft IntelliTrace \cite{Microsoft2013} instruments CLR bytecode to record high-level events and the parameters and results of function calls; it does not produce a full replay. Systems such as Chronon \cite{Deva2010} for Java instrument bytecode to collect enough data to provide the appearance of replaying execution, without actually doing a replay. Dolos \cite{Burg2013} provides record-and-replay for JS applications in Webkit by recording and replaying nondeterministic inputs to the browser. R2 \cite{Guo2008} provides record-and-replay by instrumenting library interfaces; handling data races or asynchronous events requires user effort to isolate the nondeterminism. Such systems are all significantly narrower in scope than the ability to replay general user-space execution.
 
 \subsection{Parallel Replay}
 
-Recording application threads running concurrently on multiple cores, with the possibility of data races, with low overhead, is extremely challenging. PinPlay \cite{Patil2010} and iDNA \cite{Bhansali2006} instrument shared-memory loads and report high overhead. SMP-ReVirt \cite{Dunlap2008} tracks page ownership using hardware page protection and reports high overhead on benchmarks with a lot of sharing. DoublePlay \cite{Veeraraghavan2011} runs two instances of the application and thus has high overhead when the application alone could saturate available cores. ODR \cite{Altekar2009} has low recording overhead but replay can be extremely expensive and is not guaranteed to reproduce the same program states. Castor \cite{Mashtizadeh2017} instruments synchronization code by modifying compilers and runtime systems, which creates barriers to easy deployment, and cannot replay reliably in the presence of data races.
+Recording application threads running concurrently on multiple cores, with the possibility of data races, with low overhead, is extremely challenging. PinPlay \cite{Patil2010} and iDNA/Nirvana \cite{Bhansali2006} instrument shared-memory loads and report high overhead. SMP-ReVirt \cite{Dunlap2008} tracks page ownership using hardware page protection and reports high overhead on benchmarks with a lot of sharing. DoublePlay \cite{Veeraraghavan2011} runs two instances of the application and thus has high overhead when the application alone could saturate available cores. ODR \cite{Altekar2009} has low recording overhead but replay can be extremely expensive and is not guaranteed to reproduce the same program states. Castor \cite{Mashtizadeh2017} instruments synchronization code by modifying compilers and runtime systems, which creates barriers to easy deployment, and cannot replay reliably in the presence of data races.
 
 The best hope for general, low-overhead parallel recording seems to be hardware support. Projects such as FDR \cite{Xu2003}, BugNet \cite{Narayanasamy2005}, Rerun \cite{Hower2008}, DeLorean \cite{Montesinos2008} and QuickRec \cite{Pokam2013} have explored low-overhead parallel recording hardware.
 
