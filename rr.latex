@@ -8,7 +8,9 @@
 
 \begin{document}
 
-\title{\Large \bf Engineering Record And Replay For Deployability}
+\title{\Large \bf Engineering Record And Replay For Deployability
+\\
+Extended Technical Report}
 \author{
 {\rm Robert O'Callahan}\thanks{Majority of work carried out while supported by Mozilla Research.}
 \and
