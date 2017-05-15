@@ -161,11 +161,20 @@ users often apply \system{} to test workloads with relatively small
 datasets and hence limited parallelism.
 
 The one-thread-at-a-time restriction is implemented by supervising all tracee processes/threads via
-the \ptrace{} system call. Whenever a thread needs to be suspended, \system{} receives a ``ptrace stop'' event
-from the kernel, selects the next thread to run (which could be the same thread), and resumes it with
-a {\tt PTRACE\_CONT} (or similar) \ptrace{} operation. The \ptrace{} options {\tt PTRACE\_O\_TRACEFORK}
-and {\tt PTRACE\_O\_TRACECLONE} are set to ensure newly spawned threads and processes start under
-\ptrace{} control.
+the \ptrace{} system call. Whenever a thread enters a system call,
+\system{} receives a ``ptrace stop'' event from the kernel and decides whether to allow a context
+switch or continue running the current thread. (At any potentially blocking system call, we must
+allow a context switch.) When a context switch is allowed, \system{} uses {\tt PTRACE\_SYSCALL}
+to let the thread continue running to system call exit, then selects another thread to run and resumes it with
+a {\tt PTRACE\_CONT} (or similar) \ptrace{} operation. When the new thread in turn reaches a reschedule
+point, \system{} queries the
+state of all threads using {\tt waitpid} to determine which, if any, are ready to exit blocking
+system calls and are therefore candidates for scheduling.
+
+\system{} performs preemptive context switching by periodically interrupting the running thread
+with an asynchronous signal (see Section \ref{async-events}). The normal scheduler honors Linux thread
+priorities strictly: higher-priority threads always run in preference to lower-priority threads. Threads
+with equal priority run in a round-robin manner.
 
 \subsection{System Calls} \label{syscalls}
 
@@ -240,7 +249,7 @@ and determines whether the system call can proceed normally or should produce an
 trigger emulation of others. This sandboxing can disrupt \system{} by
 interfering with the system calls \system{} performs in the tracee context.
 
-We map a page of memory at a fixed address, the ``\system{} page'', containing a
+Immediately after each {\tt execve} we map a page of memory at a fixed address, the ``\system{} page'', containing a
 ``privileged'' system-call instruction. We detect the system calls that install
 {\tt seccomp-bpf} filters, and patch the filter bytecode with a prologue exiting
 early with ``allow'' if the program counter is at the ``privileged'' instruction address.
@@ -249,6 +258,33 @@ We use that ``privileged'' instruction when performing \system{} system calls in
 We also record the effects of {\tt seccomp-bpf} filters on regular system calls and replay
 them faithfully. We do this just by observing kernel behavior, without having to
 actually implement a BPF interpreter in \system{}.
+
+\subsubsection{System Call Modeling In Practice} \label{syscall-modeling}
+
+\system{} assumes it is possible to efficiently determine from user-space state before
+and after a system call (plus, possibly, observations of previous system calls) reasonable
+bounds on the memory locations modified by the system call. For example, we would not
+be able to handle a system call that writes to random locations in memory without somehow
+indicating which locations were modified. This assumption holds adequately in practice,
+but it is a lot of work to create and maintain the model that describes how to determine the memory
+modified by each system call.
+
+The biggest problem is the {\tt ioctl} system call, which provides per-device (therefore
+extensible) system call namespaces. There is a convention for encoding the address and length of
+written memory in the ioctl parameters, but it is often not followed.
+\system{} builds in knowledge of many ioctls, but this is necessarily incomplete and needs to
+be extended from time to time to handle new applications.
+
+This issue is not unique to \system{} --- for example, Valgrind Memcheck also needs this information.
+It would be useful to have a shared repository of system call descriptions from which our
+models could be generated.
+
+An alternative approach to modeling all system calls would be to use the Linux "soft-dirty"
+tracking API \cite{SoftDirty} to identify pages modified by infrequently used or unknown
+system calls. We haven't tried this because although it might ultimately reduce work, it
+adds complexity and would not be compatible with applications that use soft-dirty for their
+own needs. Also, requiring \system{} to be aware of the semantics of all system calls means that
+we detect new system calls that require special handling by \system{}.
 
 \subsubsection{Replay}
 
@@ -304,7 +340,33 @@ To replay the entry to a signal handler, we just write the recorded signal handl
 and set the registers to the recorded values. By not delivering real signals during replay, we avoid
 having to set up signal-handler state in the replaying process.
 
-\subsection{Asynchronous Events}
+\subsubsection{Signal Handling And Interrupted System Calls}
+
+During normal non-recorded execution, when a system call is interrupted by a signal,
+the kernel adjusts the user-space registers with the program counter immediately
+after the system-call instruction and a special {\tt -ERESTARTSYS} (or similar) value in the
+system-call result register. If a signal handler needs to run, the signal frame is built and
+the signal handler runs normally. When execution returns to the pre-handler state via {\tt sigreturn},
+or a signal handler did not run but the thread is resumed by some other mechanism, then just before
+returning to user-space the
+kernel's system-call restart mechanism kicks in: when the kernel returns to userspace, if the
+system-call result register contains {\tt -ERESTARTSYS} and certain other conditions are met,
+the kernel automatically backs up the program counter to before the system call instruction and
+restores the system-call-number register. This causes the system call to reexecute.
+
+\system{} avoids interfering with this restart mechanism and relies on the kernel restarting
+interrupted system calls as it normally would. However, because we set up state on system-call
+entry that expects to be processed on system-call exit, we have to detect
+when a \ptrace{} system-call notification corresponds to a restarted system call instead of
+a new system call. There is no foolproof way to do this, but we have a heuristic that works well.
+We maintain a stack of pending interrupted system calls and their saved parameter registers.
+On every system call entry, if the parameter registers match the parameters of the most recent
+pending interrupted system call, we assume that system call is being restarted and pop it off
+the stack. If a signal
+handler interrupted a system call and then returns, but the interrupted system call is not
+immediately restarted, we assume it has been abandoned and pop it off the stack.
+
+\subsection{Asynchronous Events} \label{async-events}
 
 We need to support two kinds of asynchronous events: preemptive context switches and signals.
 We treat the former as a special case of the latter, forcing a context switch by sending a signal
@@ -445,8 +507,8 @@ the cost of even a single context switch dwarfs the cost of the system call itse
 avoid context-switches to \system{} when processing these common system calls.
 
 Therefore, we inject into the recorded process a library that intercepts common system calls, performs the system call without triggering
-a \ptrace{} trap, and records the results to a dedicated buffer shared with \system{}. \system{} periodically flushes the buffer to its
-trace. The concept is simple but there are problems to overcome.
+a \ptrace{} trap, and records the results to a dedicated buffer shared with \system{}. \system{} flushes the buffer to its
+trace every time it receives a synchronous stop notification. The concept is simple but there are problems to overcome.
 
 \subsection{Intercepting System Calls}
 
@@ -456,8 +518,8 @@ Instead, when the tracee makes a system call, \system{} is notified via a \ptrac
 rewrite the system-call instruction to call into our interception library. This is tricky
 because on x86 a system call instruction is two bytes long, but we need to replace it with a five-byte {\tt call}
 instruction.
-% (On x86-64, to ensure we can call from anywhere in the address space to the interception
-% library, we also need to also allocate trampolines within 2GB of the patched code.)
+(On x86-64, to ensure we can call from anywhere in the address space to the interception
+library, we also need to also allocate trampolines within 2GB of the patched code.)
 In practice, frequently executed system call instructions are followed by a few known, fixed instruction sequences;
 for example, many system call instructions are followed by a {\tt cmpl \$0xfffff001,\%eax} instruction testing
 the syscall result. We added five hand-written stubs to our interception library that
@@ -485,8 +547,8 @@ negligible since filters run directly in the kernel and are compiled to native c
 
 Figure \ref{syscallbuf-diagram} illustrates recording a simple {\tt read} system call with in-process system-call interception. The solid-border box represents code in the interception library and the grey box represents kernel code.
 
-\system{} injects a special page of memory into every tracee process at a fixed address (immediately after {\tt execve}).
-That page contains a system call instruction --- the ``untraced instruction''.
+As mentioned above, \system{} injects a ``\system{} page'' into every tracee process at a fixed address.
+That page contains a special system call instruction --- the ``untraced instruction''.
 \system{} applies a {\tt seccomp-bpf} filter to each recorded process that triggers a \ptrace{} trap for
 every system call --- except when the program counter is at the untraced instruction, in which case
 the call is allowed. Whenever the interception library needs to make an untraced system call, it uses that
@@ -517,11 +579,90 @@ is normally disabled and explicitly enabled during an untraced system call that 
 
 Figure \ref{syscallbuf-blocked-diagram} illustrates recording a blocking {\tt read} system call with system-call interception. The kernel deschedules the thread, triggering a {\tt perf} event which sends a signal to the thread, \emph{rescheduling} it, interrupting the system call, and sending a \ptrace{} notification to the recorder. The recorder does bookkeeping to note that an intercepted system call was interrupted in thread {\it T}, then checks whether any tracee threads in blocking system calls have progressed to a system-call exit and generated a \ptrace{} notification. In this example {\it T2} has completed a (not intercepted) blocking {\tt futex} system call, so we resume executing {\it T2}.
 
-Resuming an intercepted system call that was interrupted by a signal (e.g.\ {\it T}'s {\tt read} call in Figure \ref{syscallbuf-blocked-diagram}) is more complicated. Explaining that requires understanding Linux system call restart semantics, which are too complicated to explain in the space available here.
+Meanwhile the {\tt read} system call in {\it T} is restarted and treated much like a regular non-intercepted system call. Its
+parameters are rewritten to use scratch buffers. {\it T} is resumed using {\tt PTRACE\_SYSCALL} so that the thread will stop when the system call exits. After the system call exits, {\it T} will eventually be rescheduled. At that point
+the system-call exit will be recorded. Because the system call was recorded normally, it should not also be recorded in the
+interception library's trace buffer. Therefore \system{} sets an ``abort commit'' flag in the interception
+library's memory before resuming.
 
-% Signal interruption
+\subsection{Signal Handling}
 
-% Handling signal atomicity
+If interception code was interrupted by a context switch or asynchronous signal partway through recording
+the result of a system call, that would be disastrous. When {\tt ptrace} reports a signal arriving at a thread
+in interception code, \system{} stashes the signal away and sets a flag
+to indicate that the interception code must perform a traced ``dummy'' system call just before returning to application
+code, then resumes the tracee without delivering the signal. When the interception code performs a traced
+system call (the ``dummy'' system call, or some other system
+call for which we don't have a fast self-recording path), \system{} arranges to drain stashed
+signals before the traced system call is allowed to proceed (by setting a breakpoint at the traced
+system call entry point while there are stashed signals).
+
+A difficult edge case involves untraced {\tt sigprocmask} system calls.
+The kernel may try to deliver a signal to a thread in the interception library
+just before {\tt sigprocmask} blocks the signal. If \system{}
+were to stash the signal and try to inject it after the {\tt sigprocmask}, the signal might not be deliverable.
+Therefore, while there are stashed signals, \system{} sets a breakpoint on the untraced system call
+instruction. If a signal arrived before an untraced {\tt sigprocmask}, the breakpoint is hit and
+\system{} emulates the {\tt sigprocmask} returning {\tt EAGAIN}, causing the interception code
+to automatically retry it using a traced system call, which gives \system{} an opportunity to
+inject all stashed signals (as noted above) and always succeeds.
+
+Another difficult edge case involves multiple signals.
+Normal signal delivery can automatically block future signals, sometimes permanently 
+(e.g.\ using the {\tt sigaction} {\tt sa\_mask} feature). For example suppose signals $S_1$
+and then $S_2$ are sent to a process with two threads $T_1$ and $T_2$, and the handler for $S_1$
+is configured to block $S_2$ and just exits the thread.
+Then suppose under \system{} the kernel delivers $S_1$ to $T_1$ while $T_1$ is in
+interception code; \system{} stashes $S_1$ and resumes $T_1$. If the kernel were to then
+deliver $S_2$ to $T_1$ we would have a problem, because $S_2$ will never be handled by
+any thread, whereas during non-recorded execution the kernel would have delivered it to $T_2$ instead.
+There is not enough information available from user-space to determine where the kernel
+would have delivered $S_2$ if it had been blocked in $T_1$ (in particular we can't tell the difference
+between a signal dispatched to a specific thread and a signal dispatched to a process).
+
+Therefore it is important to ensure the kernel does not deliver a signal to a recorded thread
+unless that thread will definitely be able to handle the signal. While there is a stashed signal
+for a thread, we block any more signals from being delivered to the thread. This means there
+can never be more than one stashed signal for a thread.
+
+\subsection{Interrupted System Calls}
+
+An untraced system call can be interrupted by a signal causing a signal handler to run, after which
+the untraced system call may be resumed. This is
+similar to handling a blocked untraced system call as described above, and we handle it much the
+same way. The main extra complication is that the signal handler can run application code while
+interception library code is on the stack. To prevent reentry into the interception library code,
+we set a thread-local ``locked'' flag to indicate that any intercepted system calls should avoid
+trying to take the untraced fast path until the signal handler has returned.
+
+\subsection{Thread-Local Storage}
+
+The interception library code needs access to thread-local data. Unfortunately in some rare
+cases the standard Linux thread-local data machinery is not set up correctly, e.g.\ when
+certain applications (Chromium!) use the raw {\tt clone} system call to create a thread. To work around this,
+\system{} allocates a special ``thread locals'' memory page in each process at a fixed address, and
+on every context switch copies out the old thread's values and copies in the new thread's values for
+that page.
+
+This approach also simplifies handling of {\tt fork}. Unlike regular Linux thread-local storage,
+we make our thread-locals start off initialized to zero after a {\tt fork}. Thus when calling into
+the interception library after {\tt fork}, it can reinitialize itself.
+
+\subsection{Stack Handling}
+
+On x86-64, leaf functions are allowed to use a 128-byte ``red zone'' of memory
+below the stack pointer to avoid the cost of adjusting the stack pointer. The interception
+library needs to avoid modifying that memory. Using memory below the red zone is dangerous because
+it might cause a spurious stack overflow. (Go programs with many small stacks are particularly
+vulnerable to this.) Therefore the trampolines that enter the interception library also switch stacks
+to a temporary stack allocated as part of the thread's scratch buffer.
+
+In theory this stack switching could cause problems for application signal handlers that expect
+to be called on the regular stack but instead see our switched stack. In practice this has not
+been a problem yet. If it was a problem, we would probably have to drastically modify our
+strategy for application signal handling so that we completely unwind the interception library
+stack frames and run the application signal handler as if the original system call instruction had been
+interrupted.
 
 \subsection{Handling Replay}
 
@@ -560,6 +701,14 @@ interception library. It's simplest to minimize the divergence.
 When an input file is on the same filesystem as the recorded trace and the filesystem supports copy-on-write cloning of file blocks, for large block-aligned {\tt read}s the system call interception code clones the data to a per-thread ``cloned-data'' trace file, bypassing the normal system-call recording logic. This greatly reduces space and time overhead for file-read-intensive workloads; see the next section.
 
 This optimization works by cloning the input blocks and then reading the input data from the original input file. This opens up a possible race: between the clone and the read, another process could overwrite the input file data, in which case the data read during replay would differ from the data read during recording, causing replay to fail. However, when a file read races with a write under Linux, the reader can receive an arbitrary mix of old and new data, so such behavior would almost certainly be a severe bug, and in practice such bugs do not seem to be common. The race could be avoided by reading from the cloned-data file instead of the original input file, but that performs very poorly because it defeats Linux's readahead optimizations (since the data in the cloned-data file is never available until just before it's needed).
+
+\subsection{Retrospective}
+
+In-process system-call interception looks reasonably simple in principle, but in practice it has been
+a large maintenance burden. It has to work unchanged during recording and replay, it has to behave like
+a regular system call as much as possible (e.g. being atomic with respect to signals), and it has to be protected
+from various sorts of application misbehavior. It cannot be protected from malicious applications. On the
+other hand, without it we could not meet our performance targets.
 
 \section{Results} \label{results}
 
@@ -715,7 +864,7 @@ as implemented, breaks the determinism of the RCB
 counter and must be manually disabled.
 
 Some x86 CPU instructions are nondeterministic. Section \ref{instructions} discusses our
-current workarounds for this. Exposing hardware support for trapping {\tt CPUID} is
+current workarounds for this. Exposing hardware and OS support for trapping {\tt CPUID} is
 important for long-term control over these instructions.
 
 We would like to support record-and-replay of programs using hardware transactional
@@ -742,20 +891,95 @@ We described how \system{} performance depends on modern Linux features: {\tt se
 
 Efficient record-and-replay depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This suits Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
 
-\section{Reflection} \label{reflection}
+\system{} relies on models that specify for each system call, how to efficiently determine from the before-and-after user-space state which memory locations were modified by the system call. The smaller the number of different
+system-call interfaces (e.g.\ using APIs based on {\tt read} from file descriptors instead of
+arbitrary {\tt ioctl}s), the less work that is.
 
-% Low barrier to entry
+\section{Lessons Learned} \label{reflection}
 
-% Work really well and conveniently for some set of users
+\subsection{Deployability and Usage}
 
-% Importance of reliability especially during debugging
-% Reliability of implementation more important than theory
+We set out to build a record-and-replay system optimized for deployability, and we seem to have
+achieved that. Some Linux distributions package \system{}, and it's easy to download or build
+for those that don't. On many distributions users must tweak the {\tt perf\_events\_paranoid} kernel
+setting to enable non-root access to {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES}, but otherwise
+\system{} ``just works'' for unprivileged users running most applications in non-virtualized
+environments. This low barrier to entry is extremely important, since encouraging users to use
+new tools is difficult under any circumstances.
 
-% Overhead expectations for debugging
+Our goal was always to work very well for a significant set of users. We chose good performance
+for low-parallelism applications (and high slowdown for highly parallel applications) over
+mediocre performance for all applications because we felt the former would please more users,
+especially at Mozilla. It still appears we made the right choice.
 
-% Debugging techniques
-% Lots of assertions
-% rr under rr
+\system{} has been basically feature-complete for at least two years. Some of the authors have
+been developing new tools on top of \system{}, but for the core open source project we have been
+focusing on reliability and maintainance to ensure \system{} keeps working as hardware,
+Linux and applications evolve. Avoiding scope creep has helped keep the complexity of \system{}
+under control, and therefore helped improve reliability. Reliability matters
+because it's very important to users that
+\system{} not fall over during a long debugging session. It's a lot more important
+that \system{} work 100\% of the time on 90\% of applications than 90\% of the time on 100\% of
+applications; the former pleases 90\% of users, but the latter pleases no-one.
+
+Space and time overhead of \system{}, at least for low-parallelism workloads, seems to be
+mostly a non-issue for our users. Reported performance problems tend to be due to system calls
+not having a fast-path in the interception library, or just \system{} bugs,
+though sometimes denying direct access to the GPU
+causes performance problems. For many users the overhead of \system{} is less than the difference
+between an optimized build and a debug build of their application, and therefore not important.
+
+\subsection{Engineering \system{}}
+
+\system{} is complex and relies on poorly documented hardware and OS features. Over time we've
+had to work around a number of hardware, kernel and hypervisor bugs (and done our best to get the
+underlying bugs fixed, too). Many
+bugs in \system{} itself are difficult to diagnose and fix. In particular, small bugs in \system{}
+can cause small changes in replay state that don't manifest until much later. To some extent
+\system{} makes debugging easier for many at the cost of very difficult debugging for its
+developers!
+
+We try to detect issues in the field as close to the root cause as possible. Therefore
+\system{} has a high density of consistency assertions, most of which are checked even in release builds,
+and many of which produce custom diagnostic messages. For example, unsupported system calls
+or ioctls produce a message clearly identifying the problem and the offending system call. In general we try to
+make our invariants as strict as possible, even stricter than may seem necessary, the better to
+catch bugs and unexpected situations.
+
+\system{} has a lot of logging code, which is built into debug and release builds so that end
+users can enable it just by setting an environment variable. This makes it easier to get meaningful
+reports from users, and we have been able to diagnose many bugs just by asking users to collect the
+right logs.
+
+Being free software has helped. A small community has developed around \system{} and some users have been
+able to diagnose and fix the bugs they've found, particularly expanding system call coverage.
+
+Inspecting the state of tracees during recording and replay is very important for debugging \system{}.
+Therefore \system{} offers an ``emergency debugger'' feature, which can be manually triggered or
+triggered automatically when an error occurs. The emergency debugger activates a {\tt gdb} server
+(the same code \system{} uses to provide replay debugging) to which gdb can attach to inspect
+the register and memory state of the tracee, with full support for symbols, source mapping, etc.
+
+To track down subtle errors in memory state during replay, \system{} supports taking checksums
+and full checkpoints of memory at selected points during recording and comparing them with the replay.
+
+\system{} has a fairly good suite of automated tests that run on every commit.
+As of May 15, 2017, \system{} comprises 75028 lines of C and C++ code, of which 21403 lines belong
+to the test suite.
+
+\system{} is an excellent debugging tool, so we would like to be able to debug \system{} using \system{} itself. This is hard
+because \system{} uses kernel features like \ptrace{} very intensively and supporting those features
+well in \system{} is difficult. Furthermore, debugging \system{}
+recording using \system{} usually wouldn't make sense because if recording workload $X$ doesn't work,
+recording workload ``\system{} + $X$'' is even less likely to work. However, \system{}
+replay is simpler than recording at the kernel level (since most tracee system calls don't run),
+and we support \system{} recording and replaying of \system{} replay. This has been useful, although
+the multiple levels of \system{} can be confusing!
+
+Anecdotally we have heard that \system{} has been used to help debug QEMU-based virtual machine
+record and replay \cite{Dolan-Gavitt2015}. In turn, virtual-machine-based record and replay with a good
+debugging experience could make debugging \system{} a lot easier. Because these approaches are quite
+different, they could be very helpful for debugging each other.
 
 \section{Related Work}
 
@@ -785,7 +1009,7 @@ The best hope for general, low-overhead parallel recording seems to be hardware 
 
 \system{} perturbs execution, especially by forcing all threads onto a single core, and therefore can fail to reproduce bugs that manifest outside \system{}. We have addressed this problem by introducing a ``chaos mode'' that intelligently adds randomness to scheduling decisions, enabling us to reproduce many more bugs, but that work is beyond the scope of this paper. There are many more opportunities to enhance the recorder to find more bugs.
 
-Putting record-and-replay support in the kernel has performance benefits, e.g.\ reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation.
+Putting record-and-replay support in the kernel would have performance benefits, e.g.\ reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation. It would be particularly interesting to find small kernel extensions that could eliminate the need for in-process system call interception.
 
 Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008}, dthreads \cite{Liu2011} or Castor \cite{Mashtizadeh2017} may work for some workloads.
 
