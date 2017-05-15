@@ -468,12 +468,8 @@ is {\tt RDTSC}, which reads a time-stamp counter. This particular instruction is
 CPU can be configured to trap on an {\tt RDTSC} and Linux exposes this via a {\tt prctl} API, so we can
 trap, emulate and record each {\tt RDTSC}.
 
-Other relatively recent x86 instructions are harder to handle. {\tt RDRAND} generates random numbers and hopefully is
-not deterministic. We have only encountered it being used in one place in GNU {\tt libstdc++}, so \system{} patches that explicitly. {\tt XBEGIN} and associated instructions
-support hardware transactional memory. These are nondeterministic from the point of view of user space, since
-a hardware transaction can succeed or fail depending on CPU cache state. Fortunately so far we have only
-found these being used by the system {\tt pthreads} library, and we dynamically apply custom patches to that
-library to disable use of hardware transactions.
+{\tt RDRAND} generates random numbers and hopefully is
+not deterministic. We have only encountered it being used in one place in GNU {\tt libstdc++}, so \system{} patches that explicitly.
 
 The {\tt CPUID} instruction is mostly deterministic, but one of its features returns the index of the
 running core, which affects behavior deep in {\tt glibc} and can change as the kernel
@@ -484,6 +480,24 @@ We could easily avoid most of these issues in well-behaved programs if we could 
 instruction from user-space, since then we could mask off the feature bits indicating support for {\tt RDRAND}, hardware
 transactions, etc, as well as record-and-replay the exact values returned by the recording CPU.
 Modern Intel CPUs support this (``{\tt CPUID} faulting''); we are in the process of adding a user-accessible API for this to Linux. (In fact it just landed in Linux 4.12.)
+
+\subsubsection{Transactional Instructions}
+
+Modern Intel CPUs support two forms of transactional extensions. ``Restricted Transactional Memory'' (``RTM'') exposes transactions as an architectural feature, using the {\tt XBEGIN} and {\tt XEND} instructions to explicitly start and end transactions. ``Hardware Lock Elision'' (``HLE'') supports implicit transactions by adding the {\tt XACQUIRE} and {\tt XRELEASE} prefixes to the instructions that acquire and release a lock. The latter is a pure backwards-compatible performance hint that does not change visible semantics --- failed transactions are automatically retried non-speculatively. The former has visible side effects due to explicitly exposing transaction failures.
+
+RTM is nondeterministic from the point of view of user-space, since a hardware transaction can succeed or fail
+depending on CPU cache state (and probably the occurrence of hardware interrupts). Fortunately so far we have only
+found these being used by the system {\tt pthreads} library, and we dynamically apply custom patches to that
+library to disable use of hardware transactions. In the future we will use mask off the RTM feature bit in {\tt CPUID} to stop applications using RTM.
+
+HLE does not have user-space-visible side effects, but the regular RCB counter counts conditional branches
+retired in a failed HLE transaction, making that counter nondeterministic when HLE is used. We can't
+disable HLE via {\tt CPUID}, because HLE being backwards-compatible means code is free to use the HLE prefixes without
+checking {\tt CPUID} first. Intel provides an option ({\tt IN\_TXCP}) to have hardware performance counters only count events
+in committed transactions, so we can use that to make the RCB counter deterministic again. Unfortunately on Linux
+an {\tt IN\_TXCP} counter can't be configured to interrupt after a certain number of events have been observed, because
+this could cause infinite loops in some cases. (The scenario is: counter $C$ is configured to interrupt after $N$ events,
+a transaction starts and executes $N$ events, the interrupt fires and causes the transaction to be rolled back, restoring the counter to its original value, the kernel resumes the process, repeat...) Our solution is to use a non-{\tt IN\_TXCP} counter to trigger interrupts and a {\tt IN\_TXCP} counter to count elapsed events. This means an interrupt could fire early, which is not a problem since we already program it to fire early.
 
 \subsection{Reducing Trace Sizes} \label{trace-sizes}
 
@@ -892,7 +906,7 @@ We described how \system{} performance depends on modern Linux features: {\tt se
 Efficient record-and-replay depends on clearly identifying a boundary within which code is replayed deterministically, and recording and replaying the timing and contents of all inputs into that boundary. In \system{}, that boundary is mostly the interface between the kernel and user-space. This suits Linux: most of the Linux user/kernel interface is stable across OS versions, relatively simple and well-documented, and it's easy to count hardware performance events occurring within the boundary (i.e.\ all user-space events for a specific process). This is less true in other operating systems. For example, in Windows, the user/kernel interface is not publicly documented, and is apparently more complex and less stable than in Linux. Implementing and maintaining the \system{} approach for Windows would be considerably more challenging than for Linux, at least for anyone other than the OS vendor.
 
 \system{} relies on models that specify for each system call, how to efficiently determine from the before-and-after user-space state which memory locations were modified by the system call. The smaller the number of different
-system-call interfaces (e.g.\ using APIs based on {\tt read} from file descriptors instead of
+system-call interfaces (e.g.\ using APIs based on {\tt read} and {\tt write} through file descriptors instead of
 arbitrary {\tt ioctl}s), the less work that is.
 
 \section{Lessons Learned} \label{reflection}
@@ -907,16 +921,22 @@ setting to enable non-root access to {\tt PERF\_COUNT\_SW\_CONTEXT\_SWITCHES}, b
 environments. This low barrier to entry is extremely important, since encouraging users to use
 new tools is difficult under any circumstances.
 
+We try hard to avoid requiring manual configuration. For example, \system{} automatically
+detects kernel and virtualization bugs affecting it by running quick tests on every
+launch; if found, it prints warnings with advice about how to
+fix the environment (e.g.\ by upgrading software components) but automatically activates workarounds
+for the bugs.
+
 Our goal was always to work very well for a significant set of users. We chose good performance
 for low-parallelism applications (and high slowdown for highly parallel applications) over
 mediocre performance for all applications because we felt the former would please more users,
 especially at Mozilla. It still appears we made the right choice.
 
-\system{} has been basically feature-complete for at least two years. Some of the authors have
+\system{} has been mostly feature-complete for at least two years. Some of the authors have
 been developing new tools on top of \system{}, but for the core open source project we have been
-focusing on reliability and maintainance to ensure \system{} keeps working as hardware,
+focusing on reliability and maintainance to ensure \system{} keeps working well as hardware,
 Linux and applications evolve. Avoiding scope creep has helped keep the complexity of \system{}
-under control, and therefore helped improve reliability. Reliability matters
+under control, and therefore contributed to reliability. Reliability matters
 because it's very important to users that
 \system{} not fall over during a long debugging session. It's a lot more important
 that \system{} work 100\% of the time on 90\% of applications than 90\% of the time on 100\% of
@@ -924,24 +944,26 @@ applications; the former pleases 90\% of users, but the latter pleases no-one.
 
 Space and time overhead of \system{}, at least for low-parallelism workloads, seems to be
 mostly a non-issue for our users. Reported performance problems tend to be due to system calls
-not having a fast-path in the interception library, or just \system{} bugs,
+not having a fast-path in the interception library, or just silly \system{} bugs,
 though sometimes denying direct access to the GPU
 causes performance problems. For many users the overhead of \system{} is less than the difference
-between an optimized build and a debug build of their application, and therefore not important.
+between an optimized build and a debug build of their application, and therefore not very important.
 
 \subsection{Engineering \system{}}
 
 \system{} is complex and relies on poorly documented hardware and OS features. Over time we've
-had to work around a number of hardware, kernel and hypervisor bugs (and done our best to get the
-underlying bugs fixed, too). Many
-bugs in \system{} itself are difficult to diagnose and fix. In particular, small bugs in \system{}
-can cause small changes in replay state that don't manifest until much later. To some extent
+encountered many hardware, kernel and hypervisor bugs affecting \system{} and had to work
+around them (while doing our best to get the underlying bugs fixed, too). Those bugs, and
+many bugs in \system{} itself, are often difficult to diagnose and fix. In particular, small bugs
+can cause small changes in replay state that don't cause observable divergence until
+long after the root cause. To some extent
 \system{} makes debugging easier for many at the cost of very difficult debugging for its
 developers!
 
-We try to detect issues in the field as close to the root cause as possible. Therefore
+Therefore it is important to detect issues as soon after the root cause as possible.
 \system{} has a high density of consistency assertions, most of which are checked even in release builds,
-and many of which produce custom diagnostic messages. For example, unsupported system calls
+and many of which produce custom diagnostic messages for easier understanding in the field.
+For example, unsupported system calls
 or ioctls produce a message clearly identifying the problem and the offending system call. In general we try to
 make our invariants as strict as possible, even stricter than may seem necessary, the better to
 catch bugs and unexpected situations.
@@ -957,7 +979,7 @@ able to diagnose and fix the bugs they've found, particularly expanding system c
 Inspecting the state of tracees during recording and replay is very important for debugging \system{}.
 Therefore \system{} offers an ``emergency debugger'' feature, which can be manually triggered or
 triggered automatically when an error occurs. The emergency debugger activates a {\tt gdb} server
-(the same code \system{} uses to provide replay debugging) to which gdb can attach to inspect
+(the same code \system{} uses to provide replay debugging) to which {\tt gdb} can attach to inspect
 the register and memory state of the tracee, with full support for symbols, source mapping, etc.
 
 To track down subtle errors in memory state during replay, \system{} supports taking checksums
@@ -965,7 +987,11 @@ and full checkpoints of memory at selected points during recording and comparing
 
 \system{} has a fairly good suite of automated tests that run on every commit.
 As of May 15, 2017, \system{} comprises 75028 lines of C and C++ code, of which 21403 lines belong
-to the test suite.
+to the test suite. We have spent a lot of effort tracking down intermittent failures in the
+test suite; this usually reveals bugs in the tests, but sometimes has revealed bugs in
+\system{} or the kernel that would have been difficult to diagnose in the field. Since
+users can easily run the tests, that helps us to identify issues in a user's environment
+causing problems for \system{}.
 
 \system{} is an excellent debugging tool, so we would like to be able to debug \system{} using \system{} itself. This is hard
 because \system{} uses kernel features like \ptrace{} very intensively and supporting those features
@@ -974,7 +1000,7 @@ recording using \system{} usually wouldn't make sense because if recording workl
 recording workload ``\system{} + $X$'' is even less likely to work. However, \system{}
 replay is simpler than recording at the kernel level (since most tracee system calls don't run),
 and we support \system{} recording and replaying of \system{} replay. This has been useful, although
-the multiple levels of \system{} can be confusing!
+keeping the multiple levels of \system{} straight in one's head can be confusing!
 
 Anecdotally we have heard that \system{} has been used to help debug QEMU-based virtual machine
 record and replay \cite{Dolan-Gavitt2015}. In turn, virtual-machine-based record and replay with a good
@@ -1007,11 +1033,23 @@ The best hope for general, low-overhead parallel recording seems to be hardware 
 
 \section{Future Work}
 
+Probably the main issue holding back \system{} deployment currently is the lack of support for
+virtualized hardware performance counters in the major cloud providers. This is not really a technical
+issue; those providers need to be convinced that the benefits of virtualizing counters (or at least
+those used by \system{}) outweigh the costs and risks. Expanding the usage of \system{} is part of
+our effort to address this problem.
+
+Some use-cases for record-and-replay involve transporting recordings from one machine to
+another, which \system{} does not really support yet. Once {\tt CPUID} faulting support is widely
+available, that will be easier to implement.
+
 \system{} perturbs execution, especially by forcing all threads onto a single core, and therefore can fail to reproduce bugs that manifest outside \system{}. We have addressed this problem by introducing a ``chaos mode'' that intelligently adds randomness to scheduling decisions, enabling us to reproduce many more bugs, but that work is beyond the scope of this paper. There are many more opportunities to enhance the recorder to find more bugs.
 
 Putting record-and-replay support in the kernel would have performance benefits, e.g.\ reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation. It would be particularly interesting to find small kernel extensions that could eliminate the need for in-process system call interception.
 
-Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008}, dthreads \cite{Liu2011} or Castor \cite{Mashtizadeh2017} may work for some workloads.
+Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008}, dthreads \cite{Liu2011} or Castor \cite{Mashtizadeh2017} may work for some workloads on existing hardware. We hope that popularizing practical use
+of record-and-replay will help support the economic argument for adding hardware support for
+data-race recording \cite{Pokam2013}.
 
 The applications of record-and-replay are perhaps more interesting and important than the base technology. For example, one can perform high-overhead dynamic analysis during replay \cite{Devecsery2014, Dolan-Gavitt2015, Patil2010}, potentially parallelized over multiple segments of the execution. With \system{}'s no-instrumentation approach, one could collect performance data such as sampled stacks and performance counter values during recording, and correlate that data with rich analysis generated during replay (e.g.\ cache simulation). Always-on record-and-replay would make finding and fixing bugs in the field much easier. Demonstrating compelling applications for record-and-replay will build the case for building support into commodity hardware and software.
 
