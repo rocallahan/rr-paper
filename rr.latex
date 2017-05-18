@@ -571,7 +571,7 @@ instruction.
 \subsection{Detecting Blocked System Calls}
 
 Some common system calls sometimes block (e.g.\ {\tt read} on an empty pipe). Because \system{} runs
-tracee threads one at a time, if a thread enters a blocking system call without notifying \system{}, it
+tracee threads one at a time, if a thread enters an untraced blocking system call without notifying \system{}, it
 will hang and could cause the entire recording to deadlock (e.g.\ if another tracee thread is about to
 {\tt write} to the pipe). We need the kernel to notify \system{} and suspend the tracee thread whenever
 an untraced system call blocks, to ensure we can schedule a different tracee thread.
@@ -709,6 +709,11 @@ recorded behavior, but that would have to be done very carefully. We'd have to e
 the RCB count was identical along both paths, and that register values
 were consistent whenever we exit the interception library or trap to \system{} within the
 interception library. It's simplest to minimize the divergence.
+
+Replay of the interception library could be simplified a little by taking a different
+approach in which untraced system calls are turned into traced system calls during replay.
+However, it is important for replay performance that replay of untraced system calls avoid context
+switching to the \system{} supervisor process, and for our purposes replay performance is important.
 
 \subsection{Optimizing Reads With Block Cloning}
 
@@ -949,6 +954,25 @@ though sometimes denying direct access to the GPU
 causes performance problems. For many users the overhead of \system{} is less than the difference
 between an optimized build and a debug build of their application, and therefore not very important.
 
+Some record-and-replay techniques \cite{Altekar2009} reduce recording overhead in exchange for slower
+replay, but for our users replay performance is very important --- often more important than recording
+performance (e.g.\ when debugging an easily-reproduced bug, recording executes code once but replay
+with reverse-execution may execute it many times.)
+
+Some record-and-replay applications need to frequently create and resume checkpoints of replayed
+execution state (e.g.\ to simulate reverse execution). Making checkpoints cheap in time and memory
+is an often-overlooked design constraint. Anecdotally, creating and restoring checkpoints in VMWare's
+record-and-replay debugger was rather slow, perhaps because the entire OS state must be checkpointed.
+\system{}'s process-level design made it easy for us
+to implement cheap checkpoints: we use {\tt fork} to copy address spaces and delay creating the
+non-main threads until the checkpoint is resumed (and most checkpoints are
+never resumed). {\tt fork} is (mostly) copy-on-write and is very well optimized on Linux, so
+creating a checkpoint typically takes less than ten milliseconds. Although checkpointing
+and restoring a general Linux process from user-space is rather complicated \cite{CRIU} because a lot
+of kernel state may need to be saved and reestablished, checkpointing and restoring
+\emph{for replay only} is relatively simple, because only a minimal amount of kernel state is
+reproduced during replay.
+
 \subsection{Engineering \system{}}
 
 \system{} is complex and relies on poorly documented hardware and OS features. Over time we've
@@ -984,6 +1008,12 @@ the register and memory state of the tracee, with full support for symbols, sour
 
 To track down subtle errors in memory state during replay, \system{} supports taking checksums
 and full checkpoints of memory at selected points during recording and comparing them with the replay.
+We also support single-stepping tracees during recording and replay with logging of all register states,
+to help narrow down divergences (though that can cause bugs to disappear).
+
+To understand obscure details of Linux kernel behavior and bugs, we frequently have had to resort to
+reading kernel source code. We have also used the kernel's {\tt ftrace} \cite{ftrace} feature several times.
+Implementing something like \system{} on a system without access to full OS source code would be daunting.
 
 \system{} has a fairly good suite of automated tests that run on every commit.
 As of May 15, 2017, \system{} comprises 75028 lines of C and C++ code, of which 21403 lines belong
@@ -1045,7 +1075,7 @@ available, that will be easier to implement.
 
 \system{} perturbs execution, especially by forcing all threads onto a single core, and therefore can fail to reproduce bugs that manifest outside \system{}. We have addressed this problem by introducing a ``chaos mode'' that intelligently adds randomness to scheduling decisions, enabling us to reproduce many more bugs, but that work is beyond the scope of this paper. There are many more opportunities to enhance the recorder to find more bugs.
 
-Putting record-and-replay support in the kernel would have performance benefits, e.g.\ reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation. It would be particularly interesting to find small kernel extensions that could eliminate the need for in-process system call interception.
+Putting record-and-replay support in the kernel would have performance benefits, e.g.\ reducing the cost of recording context switches. We may be able to find reusable primitives that can be added to kernels to improve the performance of user-space record-and-replay while being less invasive than a full kernel implementation. It would be particularly interesting to find small kernel extensions that could eliminate the need for in-process system call interception. Some way to record the data passing through {\tt copy\_to\_user} would be a good start.
 
 Recording multiple processes running in parallel on multiple cores seems feasible if they do not share memory --- or, if they share memory, techniques inspired by SMP-ReVirt \cite{Dunlap2008}, dthreads \cite{Liu2011} or Castor \cite{Mashtizadeh2017} may work for some workloads on existing hardware. We hope that popularizing practical use
 of record-and-replay will help support the economic argument for adding hardware support for
