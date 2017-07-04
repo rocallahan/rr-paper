@@ -6,6 +6,8 @@
 \usepackage{graphicx}
 \usepackage{epstopdf}
 
+\pagenumbering{gobble}
+
 \begin{document}
 
 \title{\Large \bf Engineering Record And Replay For Deployability}
@@ -98,6 +100,8 @@ on modern, stock hardware and software without pervasive code instrumentation is
 \item We show that for low-parallelism workloads, \system{} recording and replay overhead is reasonably low, lower than other approaches with comparable deployability.
 \item We identify hardware and operating system design constraints required to support our approach.
 \end{itemize}
+
+An extended technical report containing additional technical details and a retrospective on ``lessons learned'' during the development and use of \system{} is available \cite{rr-tr}.
 
 \section{Design} \label{design}
 
